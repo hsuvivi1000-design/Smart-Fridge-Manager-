@@ -190,7 +190,7 @@ Agent 會呼叫哪些工具
 |許瀞云    | 負責資料庫架構 (SQLite) 與 Inventory Agent，實作食材入庫、消耗、數量更新的 CRUD 功能    |
 | 林伽紜    | 核心 Chef Agent 的 Prompt 設計與 Tool Calling 框架，串接 LLM 決策邏輯。    |
 | 林湘紜    | 負責食譜知識庫建置 (Vector DB) 與 Recipe_Matcher 檢索工具，實作語意搜尋與忌口過濾邏輯    |
-| 姚谷伝    | 負責 Expiry Agent 與 Shopping Agent。開發「食材折舊與損耗診斷」功能，計算若食材過期造成的潛在金額損失，並根據預算狀態自動產出採買清單    |
+| 姚谷伝    | 負責 Expiry Agent 與 Shopping Agent。開發「食材折舊與損耗診斷」功能    |
 ## 注意事項
 
 分工不能只寫：
