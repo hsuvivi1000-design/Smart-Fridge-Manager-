@@ -9,3 +9,9 @@ venv.bak/
 
 # macOS
 .DS_Store
+.env
+*.db
+__pycache__/
+*.pyc
+chroma_db/
+recipes_data.json
