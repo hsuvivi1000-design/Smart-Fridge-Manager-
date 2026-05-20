@@ -272,8 +272,8 @@ class TestChefAgentFramework(unittest.TestCase):
                 "instructions": ["1. 切食材", "2. 熱油下鍋炒熟"]
             }]
 
-        def mock_generate_shopping_list(missing_ingredients: list[dict], low_stock_ingredients: list[dict]) -> dict:
-            """自動整理低庫存或食譜缺件項目，產生格式化的採買清單。"""
+        def mock_generate_shopping_list(missing_ingredients: list[dict], low_stock_ingredients: list[dict], budget_status: str = None) -> dict:
+            """自動整理低庫存或食譜缺件項目，並結合預算狀態，產生格式化的採買清單。"""
             return {"shopping_list_md": "無缺件"}
 
         injected_tools = {
