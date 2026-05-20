@@ -1,9 +1,15 @@
 import chromadb
 import json
+import os
 from chromadb.utils import embedding_functions
 
+# 計算當前檔案所在目錄的上一層，以便正確找到 knowledge_base
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'knowledge_base', 'chroma_db')
+DEFAULT_PREF_PATH = os.path.join(BASE_DIR, 'knowledge_base', 'user_preferences.json')
+
 class RecipeMatcher:
-    def __init__(self, db_path='./chroma_db', collection_name='recipes'):
+    def __init__(self, db_path=DEFAULT_DB_PATH, collection_name='recipes'):
         """
         初始化 RecipeMatcher
         """
@@ -35,7 +41,7 @@ class RecipeMatcher:
                 return habit_mapping[key]
         return []
 
-    def load_user_preferences(self, file_path='user_preferences.json'):
+    def load_user_preferences(self, file_path=DEFAULT_PREF_PATH):
         """讀取使用者偏好文件"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
