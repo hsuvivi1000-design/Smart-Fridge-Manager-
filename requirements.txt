@@ -3,3 +3,8 @@ google-genai>=1.0.0
 python-dotenv>=1.0.0
 plotly>=5.18.0
 Pillow>=10.0.0
+chromadb
+sentence-transformers
+requests
+beautifulsoup4
+pydantic

@@ -1,5 +1,6 @@
 """
 主題 CSS 注入模組 — 支援淺色/深色模式切換
+來自 D1257081 分支
 """
 import streamlit as st
 
@@ -139,11 +140,13 @@ def inject_theme_css(dark_mode=False):
         font-family: 'Consolas', 'Courier New', monospace; font-size: 0.78rem;
         color: #C9D1D9; min-height: 200px;
     }}
-    .log-thought {{ color: #FFD600; }}
-    .log-tool {{ color: #58A6FF; }}
+    .log-thought {{ color: #FFD600; margin: 6px 0; }}
+    .log-tool {{ color: #58A6FF; margin: 4px 0; }}
+    .log-observation {{ color: #56D364; margin: 4px 0; padding-left: 16px; }}
     .log-memory {{ color: #56D364; }}
     .log-rag {{ color: #D2A8FF; }}
     .log-indent {{ color: #8B949E; padding-left: 16px; }}
+    .log-step {{ border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px; margin-bottom: 8px; }}
 
     .divider {{ border: none; height: 1px; background: {border}; margin: 1rem 0; }}
 
