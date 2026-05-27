@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from app.inventory_agent import InventoryAgent
 from app.database import DB_PATH
 from app.classifier import classify_ingredient
+from app.expiry_agent import estimate_expiry_date
 
 # 修正 Windows 終端機編碼問題 (cp950 不支援 Emoji)
 sys.stdout.reconfigure(encoding='utf-8')
@@ -148,11 +149,28 @@ def handle_add_ingredient(agent: InventoryAgent):
         purchase_date = datetime.now().strftime("%Y-%m-%d")
         print(f"   ℹ️ 已設定為今天: {purchase_date}")
 
-    # Step 6: 到期日期
-    expiry_date = ask_input("預計到期日？(格式: YYYY-MM-DD，按 Enter 預設 7 天後)")
+    # Step 6: 到期日期 — 優先使用 ExpiryAgent 智慧推算
+    ai_say(f"正在根據「{name}」的類別推算預估保存期限...")
+    estimated_expiry, sub_cat, shelf_days = estimate_expiry_date(
+        name=name,
+        category=category,
+        purchase_date=purchase_date,
+        storage_method="冷藏",  # 預設冷藏；未來可讓使用者選擇
+    )
+
+    # 顯示細分類別與預估天數給使用者
+    sub_cat_display = sub_cat if sub_cat != category else ""
+    if sub_cat_display:
+        ai_say(f"🧠 智慧判斷：「{name}」屬於【{sub_cat}】，預設保存 {shelf_days} 天。")
+    else:
+        ai_say(f"🧠 智慧判斷：「{name}」屬於【{category}】，預設保存 {shelf_days} 天。")
+
+    expiry_date = ask_input(
+        f"預計到期日？(格式: YYYY-MM-DD，按 Enter 使用推算日期: {estimated_expiry})"
+    )
     if not expiry_date:
-        expiry_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-        print(f"   ℹ️ 已設定為 7 天後: {expiry_date}")
+        expiry_date = estimated_expiry
+        print(f"   ℹ️ 已設定為推算到期日: {expiry_date} (購買後第 {shelf_days} 天)")
 
     # 確認
     print_divider()
