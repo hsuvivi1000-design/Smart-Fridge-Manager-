@@ -1,160 +1,351 @@
-"""
-主題 CSS 注入模組 — 支援淺色/深色模式切換
-來自 D1257081 分支
-"""
+"""CSS injection helpers for the Streamlit interface."""
+
 import streamlit as st
 
 
-def inject_theme_css(dark_mode=False):
-    """根據模式注入對應的 CSS"""
+def inject_theme_css(dark_mode: bool = False) -> None:
+    """Inject the app theme CSS."""
     if dark_mode:
-        bg = "#0E1117"; panel_bg = "#161B22"; text = "#E6EDF3"; sub_text = "#8B949E"
-        chat_bg = "#1A1A2E"; user_bubble = "#2D4A3E"; asst_bubble = "#1E2A3A"
-        input_bg = "#21262D"; border = "rgba(255,255,255,0.08)"
-        inv_bg = "#161B22"; inv_item_bg = "rgba(255,255,255,0.04)"
+        palette = {
+            "bg": "#101417",
+            "surface": "#171d21",
+            "surface_2": "#1f272c",
+            "text": "#eef3f0",
+            "muted": "#9aa8a1",
+            "border": "rgba(238, 243, 240, 0.12)",
+            "accent": "#4cc9a6",
+            "accent_2": "#6ea8fe",
+            "danger": "#ff6b6b",
+            "warning": "#f2b84b",
+            "success": "#57cc99",
+            "user": "#214e48",
+            "assistant": "#202a32",
+            "shadow": "none",
+        }
     else:
-        bg = "#FFFFFF"; panel_bg = "#F7F7F8"; text = "#333333"; sub_text = "#888888"
-        chat_bg = "#FFFFFF"; user_bubble = "#E8D5B7"; asst_bubble = "#F0F0F0"
-        input_bg = "#F5F5F5"; border = "rgba(0,0,0,0.08)"
-        inv_bg = "#FAFAFA"; inv_item_bg = "rgba(0,0,0,0.02)"
+        palette = {
+            "bg": "#f4f7f6",
+            "surface": "#ffffff",
+            "surface_2": "#eef3f1",
+            "text": "#1d2726",
+            "muted": "#62706b",
+            "border": "rgba(29, 39, 38, 0.10)",
+            "accent": "#0f8a73",
+            "accent_2": "#2f6fed",
+            "danger": "#d94f45",
+            "warning": "#b7791f",
+            "success": "#27845f",
+            "user": "#d8f0e9",
+            "assistant": "#ffffff",
+            "shadow": "0 10px 26px rgba(24, 42, 38, 0.08)",
+        }
 
-    dark_ui_css = ""
-    if dark_mode:
-        dark_ui_css = f"""
-        .stButton > button,
-        button[data-testid="stPopoverButton"],
-        div[data-testid="stFileUploader"] button,
-        div[data-testid="stCameraInput"] button {{
-            background: {input_bg};
-            color: {text};
-            border: 1px solid {border};
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --bg: {palette["bg"]};
+            --surface: {palette["surface"]};
+            --surface-2: {palette["surface_2"]};
+            --text: {palette["text"]};
+            --muted: {palette["muted"]};
+            --border: {palette["border"]};
+            --accent: {palette["accent"]};
+            --accent-2: {palette["accent_2"]};
+            --danger: {palette["danger"]};
+            --warning: {palette["warning"]};
+            --success: {palette["success"]};
+            --user: {palette["user"]};
+            --assistant: {palette["assistant"]};
+            --shadow: {palette["shadow"]};
         }}
-        .stButton > button:hover,
-        button[data-testid="stPopoverButton"]:hover,
-        div[data-testid="stFileUploader"] button:hover,
-        div[data-testid="stCameraInput"] button:hover {{
-            background: #2A3138;
-            border-color: rgba(255,255,255,0.16);
+
+        html, body, [class*="css"] {{
+            font-family: Inter, "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
+            letter-spacing: 0;
         }}
-        .stButton > button:active,
-        button[data-testid="stPopoverButton"]:active,
-        div[data-testid="stFileUploader"] button:active,
-        div[data-testid="stCameraInput"] button:active {{
-            background: #30363D;
+
+        .stApp {{
+            background:
+                linear-gradient(180deg, rgba(15, 138, 115, 0.06), transparent 240px),
+                var(--bg);
+            color: var(--text);
         }}
-        .stButton > button[kind="primary"] {{
-            background: {user_bubble};
-            color: {text};
-            border: 1px solid rgba(255,255,255,0.12);
+
+        footer, #MainMenu, header[data-testid="stHeader"] {{
+            visibility: hidden;
         }}
-        .stButton > button[kind="primary"]:hover {{
-            background: #35584A;
-            border-color: rgba(255,255,255,0.2);
+
+        [data-testid="stAppViewContainer"] > .main {{
+            padding-top: 0;
         }}
-        .stButton > button[kind="primary"]:active {{
-            background: #3D6A57;
+
+        [data-testid="stAppViewBlockContainer"] {{
+            max-width: 1480px;
+            padding: 22px 28px 28px;
         }}
-        .stButton > button:focus-visible,
-        button[data-testid="stPopoverButton"]:focus-visible,
-        div[data-testid="stFileUploader"] button:focus-visible,
-        div[data-testid="stCameraInput"] button:focus-visible {{
-            outline: none;
-            box-shadow: 0 0 0 2px rgba(88,166,255,0.35);
+
+        .app-shell {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 0 18px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 16px;
         }}
+
+        .brand-title {{
+            margin: 0;
+            font-size: 1.55rem;
+            line-height: 1.2;
+            font-weight: 750;
+            color: var(--text);
+        }}
+
+        .brand-subtitle {{
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 0.88rem;
+        }}
+
+        .top-status {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 0.82rem;
+            white-space: nowrap;
+        }}
+
+        .status-dot {{
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 0 4px rgba(39, 132, 95, 0.16);
+        }}
+
+        .metric-row {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }}
+
+        .metric-tile {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 13px;
+            box-shadow: var(--shadow);
+            min-height: 76px;
+        }}
+
+        .metric-label {{
+            color: var(--muted);
+            font-size: 0.78rem;
+            line-height: 1.2;
+            margin-bottom: 7px;
+        }}
+
+        .metric-value {{
+            color: var(--text);
+            font-size: 1.36rem;
+            font-weight: 760;
+            line-height: 1;
+        }}
+
+        .panel {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+            box-shadow: var(--shadow);
+        }}
+
+        .section-title {{
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            margin: 0 0 12px;
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 720;
+        }}
+
+        .section-note {{
+            color: var(--muted);
+            font-size: 0.76rem;
+            font-weight: 500;
+        }}
+
+        .inventory-list {{
+            display: grid;
+            gap: 8px;
+        }}
+
+        .inventory-item {{
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--success);
+            border-radius: 8px;
+            background: var(--surface);
+            padding: 10px 11px;
+        }}
+
+        .inventory-item.warning {{ border-left-color: var(--warning); }}
+        .inventory-item.danger {{ border-left-color: var(--danger); }}
+
+        .inventory-main {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }}
+
+        .inventory-name {{
+            color: var(--text);
+            font-weight: 700;
+            font-size: 0.95rem;
+            overflow-wrap: anywhere;
+        }}
+
+        .inventory-date {{
+            color: var(--muted);
+            font-size: 0.76rem;
+            white-space: nowrap;
+        }}
+
+        .inventory-meta {{
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 0.78rem;
+            overflow-wrap: anywhere;
+        }}
+
+        .empty-state {{
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            padding: 18px 14px;
+            color: var(--muted);
+            background: var(--surface-2);
+            font-size: 0.9rem;
+        }}
+
+        .chat-frame {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: var(--shadow);
+        }}
+
+        .chat-bubble {{
+            width: fit-content;
+            max-width: min(76%, 680px);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            padding: 11px 13px;
+            margin: 9px 0;
+            font-size: 0.94rem;
+            line-height: 1.58;
+            overflow-wrap: anywhere;
+        }}
+
+        .assistant-bubble {{
+            background: var(--assistant);
+            color: var(--text);
+            margin-right: auto;
+        }}
+
+        .user-bubble {{
+            background: var(--user);
+            color: var(--text);
+            margin-left: auto;
+        }}
+
+        .log-panel {{
+            min-height: 420px;
+            max-height: 620px;
+            overflow: auto;
+            background: #111820;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 0.76rem;
+            line-height: 1.55;
+            color: #d7dee8;
+        }}
+
+        .log-step {{
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }}
+
+        .log-thought {{ color: #f6d365; }}
+        .log-tool {{ color: #79b8ff; }}
+        .log-observation {{ color: #7ee787; padding-left: 10px; }}
+        .log-indent {{ color: #8b949e; }}
 
         .stTextInput input,
         .stTextArea textarea,
-        .stNumberInput input {{
-            background-color: {input_bg};
-            color: {text};
-            border-color: {border};
-        }}
-        .stTextInput input::placeholder,
-        .stTextArea textarea::placeholder {{
-            color: {sub_text};
-        }}
-        .stTextInput input:focus,
-        .stTextArea textarea:focus,
-        .stNumberInput input:focus {{
-            border-color: rgba(88,166,255,0.5);
-            box-shadow: 0 0 0 2px rgba(88,166,255,0.2);
+        .stNumberInput input,
+        .stSelectbox [data-baseweb="select"] {{
+            border-radius: 8px;
         }}
 
-        div[data-testid="stFileUploader"] section {{
-            background: {panel_bg};
-            border: 1px dashed {border};
+        .stButton > button,
+        button[data-testid="stPopoverButton"] {{
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-weight: 680;
+            min-height: 40px;
         }}
-        div[data-testid="stFileUploader"] label,
-        div[data-testid="stCameraInput"] label {{
-            color: {sub_text};
+
+        .stButton > button[kind="primary"] {{
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }}
+
+        .stButton > button:hover,
+        button[data-testid="stPopoverButton"]:hover {{
+            border-color: var(--accent);
         }}
 
         div[data-testid="stExpander"] {{
-            background: {panel_bg};
-            border: 1px solid {border};
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: 8px;
+            box-shadow: none;
         }}
-        div[data-testid="stExpander"] > details > summary {{
-            color: {text};
+
+        hr {{
+            border-color: var(--border);
         }}
-        div[data-testid="stExpander"] > details > summary:hover {{
-            background: rgba(255,255,255,0.03);
+
+        @media (max-width: 900px) {{
+            [data-testid="stAppViewBlockContainer"] {{
+                padding: 16px 14px 20px;
+            }}
+
+            .app-shell {{
+                align-items: flex-start;
+                flex-direction: column;
+            }}
+
+            .metric-row {{
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }}
+
+            .chat-bubble {{
+                max-width: 92%;
+            }}
         }}
-        div[data-testid="stExpander"] > details > div {{
-            background: {panel_bg};
-        }}
-        """
-
-    st.markdown(f"""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
-    .stApp {{ background-color: {bg}; color: {text}; }}
-    footer, #MainMenu, header[data-testid="stHeader"] {{ visibility: hidden; }}
-    [data-testid="stSidebar"] {{ display: none; }}
-    [data-testid="stAppViewBlockContainer"] {{ padding-top: 1rem; }}
-
-    .panel-header {{
-        font-size: 1.1rem; font-weight: 700; padding: 12px 0 8px 0;
-        border-bottom: 1px solid {border}; margin-bottom: 12px; color: {text};
-    }}
-    .inventory-item {{
-        padding: 10px 14px; margin: 8px 0; border-radius: 6px;
-        background: {inv_item_bg}; font-size: 0.92rem; color: {text};
-    }}
-    .item-category {{ font-size: 0.8rem; color: {sub_text}; }}
-
-    .chat-area {{
-        background: {chat_bg}; border-radius: 12px; padding: 16px;
-        border: 1px solid {border};
-    }}
-    .chat-bubble {{
-        padding: 12px 16px; border-radius: 14px; margin: 10px 0;
-        max-width: 82%; font-size: 0.95rem; line-height: 1.6; color: {text};
-    }}
-    .assistant-bubble {{ background: {asst_bubble}; margin-right: auto; }}
-    .user-bubble {{ background: {user_bubble}; margin-left: auto; text-align: right; }}
-
-    .log-panel {{
-        background: #1A1A2E; border-radius: 10px; padding: 16px;
-        font-family: 'Consolas', 'Courier New', monospace; font-size: 0.78rem;
-        color: #C9D1D9; min-height: 200px;
-    }}
-    .log-thought {{ color: #FFD600; margin: 6px 0; }}
-    .log-tool {{ color: #58A6FF; margin: 4px 0; }}
-    .log-observation {{ color: #56D364; margin: 4px 0; padding-left: 16px; }}
-    .log-memory {{ color: #56D364; }}
-    .log-rag {{ color: #D2A8FF; }}
-    .log-indent {{ color: #8B949E; padding-left: 16px; }}
-    .log-step {{ border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px; margin-bottom: 8px; }}
-
-    .divider {{ border: none; height: 1px; background: {border}; margin: 1rem 0; }}
-
-    .stButton > button {{
-        border-radius: 8px; font-weight: 500;
-        transition: transform 0.15s ease;
-    }}
-    .stButton > button:hover {{ transform: translateY(-1px); }}
-    {dark_ui_css}
-    </style>
-    """, unsafe_allow_html=True)
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
