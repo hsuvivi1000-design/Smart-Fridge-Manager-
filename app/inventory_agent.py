@@ -26,7 +26,8 @@ class InventoryAgent:
         """
         [Create] 食材入庫
         """
-        VALID_UNITS = ["克", "公斤", "毫克", "公升"]
+        # 放寬單位限制，支援日常單位
+        VALID_UNITS = ["克", "公斤", "毫克", "公升", "毫升", "個", "顆", "把", "包", "盒", "瓶", "罐", "片", "條", "塊"]
         if unit not in VALID_UNITS:
             raise ValueError(f"不支援的單位「{unit}」。僅支援：{', '.join(VALID_UNITS)}")
 
