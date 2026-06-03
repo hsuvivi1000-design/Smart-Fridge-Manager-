@@ -1,17 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+
 # Environments
 .env
-.venv
-env/
+.venv/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
 
-# macOS
-.DS_Store
-.env
+# Database
 *.db
-__pycache__/
-*.pyc
+fridge_inventory.db
+fridge.db
+test_fridge_inventory.db
+
+# ChromaDB
 chroma_db/
+knowledge_base/chroma_db/
+
+# Scraped data
 recipes_data.json
+knowledge_base/recipes_data.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

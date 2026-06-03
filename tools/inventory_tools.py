@@ -1,4 +1,18 @@
 from typing import Optional, List, Dict, Any
+from datetime import datetime
+from app.inventory_agent import InventoryAgent
+from app.classifier import classify_ingredient
+from app.expiry_agent import estimate_expiry_date
+
+# 共用 InventoryAgent 實例
+_agent = None
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        _agent = InventoryAgent()
+    return _agent
+
 
 def get_inventory() -> List[Dict[str, Any]]:
     """
@@ -7,7 +21,10 @@ def get_inventory() -> List[Dict[str, Any]]:
     Returns:
         List[Dict[str, Any]]: 庫存食材列表。每個食材包含 name、quantity、unit、purchase_date、expiry_date、category。
     """
-    raise NotImplementedError("待角色 B 實作")
+    agent = _get_agent()
+    inventory = agent.get_all_inventory()
+    return inventory if inventory else []
+
 
 def add_ingredient(
     name: str,
@@ -31,7 +48,50 @@ def add_ingredient(
     Returns:
         Dict[str, Any]: 新增成功的食材詳細資料。
     """
-    raise NotImplementedError("待角色 B 實作")
+    agent = _get_agent()
+
+    # 若未指定類別，透過 AI 分類器自動判斷
+    if not category:
+        category = classify_ingredient(name)
+
+    # 若未指定購買日期，預設為今天
+    if not purchase_date:
+        purchase_date = datetime.now().strftime("%Y-%m-%d")
+
+    shelf_days = None
+    sub_category = category
+
+    # 若未指定到期日期，使用 D1109866 的智慧效期推算
+    if not expiry_date:
+        expiry_date, sub_category, shelf_days = estimate_expiry_date(
+            name=name,
+            category=category,
+            purchase_date=purchase_date,
+            storage_method="冷藏",
+        )
+
+    item_id = agent.add_ingredient(
+        name=name,
+        category=category,
+        quantity=quantity,
+        unit=unit,
+        purchase_date=purchase_date,
+        expiry_date=expiry_date
+    )
+
+    return {
+        "status": "success",
+        "id": item_id,
+        "name": name,
+        "quantity": quantity,
+        "unit": unit,
+        "category": category,
+        "sub_category": sub_category,
+        "shelf_days": shelf_days,
+        "purchase_date": purchase_date,
+        "expiry_date": expiry_date
+    }
+
 
 def consume_ingredient(name: str, quantity: float, unit: str) -> Dict[str, Any]:
     """
@@ -45,4 +105,28 @@ def consume_ingredient(name: str, quantity: float, unit: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: 消耗後的食材剩餘狀態，如果完全消耗則 quantity 為 0。
     """
-    raise NotImplementedError("待角色 B 實作")
+    agent = _get_agent()
+    inventory = agent.get_all_inventory()
+
+    # 依名稱找到對應的食材
+    target = None
+    for item in inventory:
+        if item['name'] == name:
+            target = item
+            break
+
+    if not target:
+        return {"error": f"找不到食材「{name}」", "status": "not_found"}
+
+    try:
+        agent.consume_ingredient(target['id'], quantity)
+        updated = agent.get_ingredient(target['id'])
+        return {
+            "status": "success",
+            "name": name,
+            "consumed": quantity,
+            "remaining_quantity": updated['quantity'] if updated else 0,
+            "unit": unit
+        }
+    except ValueError as e:
+        return {"error": str(e), "status": "insufficient"}
