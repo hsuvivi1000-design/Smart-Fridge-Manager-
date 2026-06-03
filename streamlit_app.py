@@ -154,27 +154,31 @@ def render_inventory(items: list[dict[str, Any]]) -> None:
         icon = CATEGORY_ICONS.get(category, CATEGORY_ICONS["其他"])
         css_tone = "danger" if tone == "danger" else "warning" if tone == "warning" else ""
         rows.append(
-            f"""
-            <div class="inventory-item {css_tone}">
-                <div class="inventory-main">
-                    <div class="inventory-name">{safe_text(icon)} {safe_text(item.get("name", "未命名"))}</div>
-                    <div class="inventory-date">{safe_text(label)}</div>
-                </div>
-                <div class="inventory-meta">
-                    {safe_text(category)} · {safe_text(item.get("quantity", 0))} {safe_text(item.get("unit", ""))}
-                    · 到期 {safe_text(item.get("expiry_date", "未設定"))}
-                </div>
-            </div>
-            """
+            '<div class="inventory-item {tone}">'
+            '<div class="inventory-main">'
+            '<div class="inventory-name">{icon} {name}</div>'
+            '<div class="inventory-date">{label}</div>'
+            "</div>"
+            '<div class="inventory-meta">{category} · {quantity} {unit} · 到期 {expiry}</div>'
+            "</div>".format(
+                tone=css_tone,
+                icon=safe_text(icon),
+                name=safe_text(item.get("name", "未命名")),
+                label=safe_text(label),
+                category=safe_text(category),
+                quantity=safe_text(item.get("quantity", 0)),
+                unit=safe_text(item.get("unit", "")),
+                expiry=safe_text(item.get("expiry_date", "未設定")),
+            )
         )
 
     st.markdown(
-        f"""
-        <div class="panel">
-            <div class="section-title">庫存狀態 <span class="section-note">{len(items)} 項</span></div>
-            <div class="inventory-list">{''.join(rows)}</div>
-        </div>
-        """,
+        (
+            '<div class="panel">'
+            f'<div class="section-title">庫存狀態 <span class="section-note">{len(items)} 項</span></div>'
+            f'<div class="inventory-list">{"".join(rows)}</div>'
+            "</div>"
+        ),
         unsafe_allow_html=True,
     )
 
