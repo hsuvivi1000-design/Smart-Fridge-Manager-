@@ -18,9 +18,11 @@ from app.inventory_agent import InventoryAgent
 from ui.config import (
     CATEGORIES,
     CATEGORY_ICONS,
+    DEFAULT_UNIT,
     GEMINI_API_KEY,
     GEMINI_MODEL,
     STORAGE_METHODS,
+    UNIT_ALIASES,
     UNITS,
 )
 from ui.styles import inject_theme_css
@@ -226,6 +228,7 @@ def process_image_with_gemini(image: Image.Image) -> dict[str, Any]:
 
         client = genai.Client(api_key=GEMINI_API_KEY)
         categories = "、".join(CATEGORIES)
+        allowed_units = "、".join(UNITS)
         prompt = f"""
 你是 AI 冰箱管家。請辨識圖片中的食材，只回傳 JSON。
 格式：
@@ -234,11 +237,16 @@ def process_image_with_gemini(image: Image.Image) -> dict[str, Any]:
   "ingredients": [{{"name":"食材名稱","quantity":1,"unit":"個","category":"蔬菜"}}]
 }}
 category 必須是以下之一：{categories}
+unit 必須是以下之一：{allowed_units}
+quantity 必須是數字。若圖片是水果盤或多種食材，請依食材種類拆成多筆；不確定單位時使用「個」。
 """
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[image, prompt],
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0,
+            ),
         )
         result = json.loads(response.text)
         result.setdefault("response", "已辨識食材。")
@@ -252,9 +260,24 @@ category 必須是以下之一：{categories}
         }
 
 
-def save_ingredients_to_db(items: list[dict[str, Any]]) -> int:
+def normalize_unit(unit: Any) -> str:
+    cleaned = str(unit or "").strip()
+    aliased = UNIT_ALIASES.get(cleaned, cleaned)
+    return aliased if aliased in UNITS else DEFAULT_UNIT
+
+
+def parse_quantity(quantity: Any) -> float:
+    try:
+        parsed = float(quantity)
+    except (TypeError, ValueError):
+        return 1.0
+    return parsed if parsed > 0 else 1.0
+
+
+def save_ingredients_to_db(items: list[dict[str, Any]]) -> dict[str, Any]:
     today = date.today().strftime("%Y-%m-%d")
     saved = 0
+    skipped = []
     for item in items:
         name = str(item.get("name", "")).strip()
         if not name:
@@ -270,16 +293,19 @@ def save_ingredients_to_db(items: list[dict[str, Any]]) -> int:
             storage_method="冷藏",
         )
 
-        inventory_agent.add_ingredient(
-            name=name,
-            category=category,
-            quantity=float(item.get("quantity", 1)),
-            unit=item.get("unit") or "個",
-            purchase_date=today,
-            expiry_date=expiry_date,
-        )
-        saved += 1
-    return saved
+        try:
+            inventory_agent.add_ingredient(
+                name=name,
+                category=category,
+                quantity=parse_quantity(item.get("quantity", 1)),
+                unit=normalize_unit(item.get("unit")),
+                purchase_date=today,
+                expiry_date=expiry_date,
+            )
+            saved += 1
+        except Exception as exc:
+            skipped.append({"name": name, "reason": str(exc)})
+    return {"saved": saved, "skipped": skipped}
 
 
 def render_chef_logs(logs: list[dict[str, Any]]) -> str:
@@ -330,10 +356,21 @@ def handle_pending_events() -> None:
         result = process_image_with_gemini(image)
         st.session_state.messages.append({"role": "assistant", "content": result["response"]})
         if result.get("ingredients"):
-            saved = save_ingredients_to_db(result["ingredients"])
+            save_result = save_ingredients_to_db(result["ingredients"])
+            saved = save_result["saved"]
+            skipped = save_result["skipped"]
             st.session_state.messages.append(
                 {"role": "assistant", "content": f"已將 {saved} 項食材加入庫存。"}
             )
+            if skipped:
+                skipped_names = "、".join(item["name"] for item in skipped[:3])
+                more = f"等 {len(skipped)} 項" if len(skipped) > 3 else ""
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": f"有 {len(skipped)} 項食材未能入庫：{skipped_names}{more}。",
+                    }
+                )
         st.session_state.execution_log = [
             {
                 "thought": "Analyze uploaded ingredient image.",
