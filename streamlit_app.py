@@ -416,7 +416,8 @@ with left_col:
             name = st.text_input("食材名稱", placeholder="高麗菜")
             c1, c2 = st.columns([1, 1])
             with c1:
-                category = st.selectbox("分類", CATEGORIES)
+                cat_options = ["🤖 自動判斷"] + CATEGORIES
+                selected_category = st.selectbox("分類", cat_options)
                 quantity = st.number_input("數量", min_value=0.0, value=1.0, step=0.5)
             with c2:
                 unit = st.selectbox("單位", UNITS)
@@ -429,15 +430,17 @@ with left_col:
                 st.warning("請輸入食材名稱。")
             else:
                 today = date.today().strftime("%Y-%m-%d")
+                final_category = classify_ingredient(cleaned_name) if selected_category == "🤖 自動判斷" else selected_category
+                
                 expiry_date, sub_category, shelf_days = estimate_expiry_date(
                     name=cleaned_name,
-                    category=category,
+                    category=final_category,
                     purchase_date=today,
                     storage_method=storage_method,
                 )
                 inventory_agent.add_ingredient(
                     name=cleaned_name,
-                    category=category,
+                    category=final_category,
                     quantity=quantity,
                     unit=unit,
                     purchase_date=today,
@@ -451,7 +454,7 @@ with left_col:
                             "tool": "InventoryAgent.add_ingredient",
                             "args": {
                                 "name": cleaned_name,
-                                "category": category,
+                                "category": final_category,
                                 "sub_category": sub_category,
                                 "storage_method": storage_method,
                             },
@@ -459,6 +462,44 @@ with left_col:
                         "observation": {"expiry_date": expiry_date, "shelf_days": shelf_days},
                     }
                 ]
+                st.rerun()
+
+    with st.expander("管理與編輯庫存"):
+        if not ingredients:
+            st.info("目前無庫存。")
+        else:
+            item_options = {item['id']: f"{item['name']} ({item['quantity']} {item['unit']})" for item in ingredients}
+            selected_item_id = st.selectbox("選擇要編輯的食材", options=list(item_options.keys()), format_func=lambda x: item_options[x])
+            
+            selected_item = next(item for item in ingredients if item['id'] == selected_item_id)
+            
+            with st.form("edit_inventory_form"):
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    edit_category = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(selected_item['category']) if selected_item['category'] in CATEGORIES else 0)
+                    edit_quantity = st.number_input("數量", min_value=0.0, value=float(selected_item['quantity']), step=0.5)
+                with c2:
+                    current_expiry = datetime.strptime(selected_item['expiry_date'], "%Y-%m-%d").date() if selected_item.get('expiry_date') and selected_item['expiry_date'] != "未設定" else date.today()
+                    edit_expiry = st.date_input("過期時間", value=current_expiry)
+                
+                col_save, col_delete = st.columns(2)
+                with col_save:
+                    submitted_edit = st.form_submit_button("儲存修改", type="primary", use_container_width=True)
+                with col_delete:
+                    submitted_delete = st.form_submit_button("刪除此食材", use_container_width=True)
+            
+            if submitted_edit:
+                inventory_agent.update_ingredient(
+                    item_id=selected_item_id,
+                    category=edit_category,
+                    quantity=edit_quantity,
+                    expiry_date=edit_expiry.strftime("%Y-%m-%d")
+                )
+                st.success(f"{selected_item['name']} 已更新。")
+                st.rerun()
+            elif submitted_delete:
+                inventory_agent.delete_ingredient(item_id=selected_item_id)
+                st.success(f"{selected_item['name']} 已刪除。")
                 st.rerun()
 
     with st.expander("偏好設定"):
