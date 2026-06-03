@@ -2,6 +2,32 @@ import json
 import chromadb
 import os
 from chromadb.utils import embedding_functions
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class CustomGeminiEmbeddingFunction(EmbeddingFunction):
+    def __init__(self, api_key: str, model_name: str = "gemini-embedding-2"):
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = []
+        for text in input:
+            response = self.client.models.embed_content(
+                model=self.model_name,
+                contents=text
+            )
+            # Depending on SDK version, it might be response.embeddings[0].values or response.embeddings.values
+            try:
+                emb = response.embeddings[0].values
+            except (IndexError, TypeError, AttributeError):
+                emb = response.embeddings.values if hasattr(response.embeddings, 'values') else response.embeddings
+            embeddings.append(emb)
+        return embeddings
+
 
 def build_vector_db():
     data_file = 'recipes_data.json'
@@ -27,9 +53,14 @@ def build_vector_db():
     # In a production environment for Chinese, a multilingual model like `paraphrase-multilingual-MiniLM-L12-v2` is better,
     # but for this demo, the default or explicitly setting a multilingual one is fine.
     # We will explicitly use a multilingual model for better Chinese support.
-    print("載入 Embedding 模型 (這可能需要一點時間下載模型)...")
-    sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="paraphrase-multilingual-MiniLM-L12-v2"
+    print("載入 Google Gemini Embedding 模型...")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("警告: 找不到 GEMINI_API_KEY，請確認 .env 檔案的設定。")
+        
+    google_ef = CustomGeminiEmbeddingFunction(
+        api_key=api_key,
+        model_name="gemini-embedding-2"
     )
     
     # Create or get collection
@@ -42,7 +73,7 @@ def build_vector_db():
         
     collection = client.create_collection(
         name=collection_name, 
-        embedding_function=sentence_transformer_ef
+        embedding_function=google_ef
     )
     
     documents = []
