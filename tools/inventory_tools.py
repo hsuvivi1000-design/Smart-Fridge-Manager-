@@ -32,7 +32,8 @@ def add_ingredient(
     unit: str,
     category: Optional[str] = None,
     purchase_date: Optional[str] = None,
-    expiry_date: Optional[str] = None
+    expiry_date: Optional[str] = None,
+    min_quantity: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     新增食材到冰箱庫存中。
@@ -44,6 +45,7 @@ def add_ingredient(
         category (Optional[str]): 食材類別，例如: "蔬菜類"
         purchase_date (Optional[str]): 購買日期，格式為 YYYY-MM-DD，預設為今天
         expiry_date (Optional[str]): 預計過期日期，格式為 YYYY-MM-DD
+        min_quantity (Optional[float]): 安全存量臨界值
 
     Returns:
         Dict[str, Any]: 新增成功的食材詳細資料。
@@ -76,7 +78,8 @@ def add_ingredient(
         quantity=quantity,
         unit=unit,
         purchase_date=purchase_date,
-        expiry_date=expiry_date
+        expiry_date=expiry_date,
+        min_quantity=min_quantity
     )
 
     return {
@@ -89,7 +92,8 @@ def add_ingredient(
         "sub_category": sub_category,
         "shelf_days": shelf_days,
         "purchase_date": purchase_date,
-        "expiry_date": expiry_date
+        "expiry_date": expiry_date,
+        "min_quantity": min_quantity
     }
 
 

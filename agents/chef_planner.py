@@ -72,17 +72,36 @@ class ChefAgent:
             types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
         ]
         logs = []
+        expired_names_set: set = set()  # 跨工具累積過期食材名稱
 
         # 設計 System Prompt (專業大廚與冰箱管家角色，定義決策優先級)
+        from datetime import datetime
+        today_str = datetime.now().strftime("%Y-%m-%d")
         system_instruction = (
             "你是一位專業的大廚與冰箱大管家 (AI Kitchen Chef Agent)。\n"
-            "你的任務是精準管理冰箱庫存、追蹤食材效期，並推薦合適的食譜與產生採買清單。\n"
-            "請嚴格遵守以下決策優先流程與規範：\n"
-            "1. 當收到使用者請求時，優先呼叫 `get_inventory` 工具檢查冰箱中的現有庫存與數量。\n"
-            "2. 取得庫存後，呼叫 `check_expiry` 工具評估所有食材的保存期限、保存狀態，並計算若食材過期造成的潛在金額損失。\n"
-            "3. 根據現有的食材與即將過期的食材，以及使用者的健康偏好/忌口設定，呼叫 `search_recipes` 工具推薦合適的食譜。\n"
-            "4. 檢查推薦食譜所需食材。如果現有庫存不足或缺少食材，主動呼叫 `generate_shopping_list` 工具（可傳入 `budget_status` 參數，如「吃緊」、「正常」、「充裕」）來整理出符合預算限制的缺少食材採買清單。\n"
-            "5. 你的回覆必須包含完整的分析思考過程，並在最終將推薦食譜、採買清單以友善的繁體中文呈現給使用者。"
+            f"今天的日期是：{today_str}。\n"
+            "你的任務是根據冰箱現有食材，為使用者推薦今日可以烹飪的料理。\n"
+            "請嚴格遵守以下決策流程，不可跳過任何步驟：\n\n"
+            "【步驟一：取得庫存】\n"
+            "呼叫 `get_inventory` 取得所有食材的清單（含名稱、數量、到期日）。\n\n"
+            "【步驟二：過濾過期食材】\n"
+            "呼叫 `check_expiry` 判斷每項食材的保存狀態。\n"
+            "- 狀態為「已過期」的食材，絕對不可用於任何食譜推薦，請在心中記下它們的名稱，留待最後告知使用者。\n"
+            "- 僅使用狀態為「正常」、「即將到期」或「剩餘天數 ≤ 3 天」的食材來規劃菜色。\n\n"
+            "【步驟三：推薦食譜（2–3 道）】\n"
+            "呼叫 `search_recipes`，根據以下原則選出 2 到 3 道菜：\n"
+            "- 優先選用即將到期（剩餘天數最少）的食材，避免浪費。\n"
+            "- 所有推薦食譜的主要食材必須是冰箱中「未過期」的庫存。\n"
+            "- 每道菜請說明：菜名、使用到哪些冰箱食材、簡短烹調方式（1–2 句）。\n\n"
+            "【步驟四：採買清單（視需要）】\n"
+            "僅在推薦食譜缺少部分食材時，才呼叫 `generate_shopping_list` 列出需採購的項目。\n"
+            "若冰箱食材已足夠完成所有推薦菜色，則跳過此步驟，不需產生採買清單。\n\n"
+            "【步驟五：最終回覆格式】\n"
+            "請以繁體中文，按照以下順序回覆使用者：\n"
+            "1. 🍽️ 今日推薦菜色（2–3 道），說明每道菜使用的食材與作法。\n"
+            "2. 🛒 採買清單（若有缺料才顯示）。\n"
+            "3. ⚠️ 已過期食材提醒：列出所有過期食材名稱，提醒使用者已無法使用。\n"
+            "   若無過期食材，此區塊可省略。\n"
         )
 
         # 設定 GenerateContentConfig
@@ -154,6 +173,39 @@ class ChefAgent:
                             "error": f"Exception occurred in tool '{tool_name}'",
                             "detail": str(e)
                         }
+                    # ── 攔截工具回傳，確保 LLM 永遠看不到過期食材 ──
+                    if tool_name == "get_inventory" and isinstance(observation, list):
+                        from datetime import datetime
+                        today = datetime.now().date()
+                        fresh_items = []
+                        for item in observation:
+                            expiry_str = item.get("expiry_date", "")
+                            try:
+                                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                                days_left = (expiry_date - today).days
+                            except (ValueError, TypeError):
+                                days_left = None
+
+                            if days_left is not None and days_left < 0:
+                                # 已過期 → 記錄名稱，不傳給 LLM
+                                expired_names_set.add(item.get("name", "未知"))
+                            else:
+                                # 未過期 → 附上剩餘天數方便 LLM 排序緊迫程度
+                                item_copy = dict(item)
+                                if days_left is not None:
+                                    item_copy["days_left"] = days_left
+                                fresh_items.append(item_copy)
+
+                        # 覆寫 observation，LLM 只拿到未過期食材
+                        observation = fresh_items
+
+                    elif tool_name == "check_expiry" and isinstance(observation, list):
+                        # check_expiry 結果中「已過期」的名稱也累積到集合
+                        for item in observation:
+                            if item.get("status") == "已過期":
+                                expired_names_set.add(item.get("name", "未知"))
+                        # 過濾觀測結果，只保留非過期項目給 LLM
+                        observation = [item for item in observation if item.get("status") != "已過期"]
                 else:
                     observation = {
                         "error": f"Tool '{tool_name}' not registered in ChefAgent"
@@ -182,6 +234,16 @@ class ChefAgent:
                 )
 
         final_response = response.text if response.text else "決策流程執行完畢。"
+        # 過期食材警告：統一放在回覆最末，且使用從兩個工具累積的去重名稱集合
+        if expired_names_set:
+            sorted_names = sorted(expired_names_set)  # 排序讓輸出穩定
+            expired_footer = (
+                "\n---\n"
+                "⚠️ **已過期食材提醒**\n"
+                f"以下食材已過期，**請勿食用且不能用於料理**：{', '.join(sorted_names)}。\n"
+                "建議儘速清理冰箱並補充新鮮食材。"
+            )
+            final_response = final_response + expired_footer
         return {
             "response": final_response,
             "logs": logs

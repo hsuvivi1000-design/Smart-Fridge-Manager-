@@ -21,16 +21,23 @@ def init_db():
                 purchase_date DATE,
                 expiry_date DATE,
                 status TEXT DEFAULT 'fresh',
+                min_quantity REAL DEFAULT 0.0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
+        # 檢查並進行欄位遷移 (Migration)
+        cursor.execute("PRAGMA table_info(inventory)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'min_quantity' not in columns:
+            cursor.execute("ALTER TABLE inventory ADD COLUMN min_quantity REAL DEFAULT 0.0")
+        
         # 2. 建立歷史異動紀錄表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS action_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action_type TEXT NOT NULL,          -- 'ADD', 'CONSUME', 'UPDATE_QTY', 'DELETE'
+                action_type TEXT NOT NULL,          -- 'ADD', 'CONSUME', 'UPDATE_QTY', 'DELETE', 'UPDATE_MIN_QTY'
                 ingredient_name TEXT NOT NULL,
                 quantity REAL,
                 unit TEXT,
