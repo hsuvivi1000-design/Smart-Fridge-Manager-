@@ -22,7 +22,7 @@ class InventoryAgent:
         except Exception as e:
             logger.error(f"❌ 無法記錄歷史異動: {e}")
 
-    def add_ingredient(self, name: str, category: str, quantity: float, unit: str, purchase_date: str, expiry_date: str, status: str = 'fresh') -> int:
+    def add_ingredient(self, name: str, category: str, quantity: float, unit: str, purchase_date: str, expiry_date: str, status: str = 'fresh', min_quantity: float = None) -> int:
         """
         [Create] 食材入庫
         """
@@ -36,17 +36,46 @@ class InventoryAgent:
         if unit not in VALID_UNITS:
             raise ValueError(f"不支援的單位「{unit}」。僅支援：{', '.join(VALID_UNITS)}")
 
+        # 智慧預設安全臨界值
+        if min_quantity is None:
+            if unit in ["克", "毫克", "毫升"]:
+                min_quantity = 100.0
+            elif unit in ["公斤", "公升", "個", "顆", "把", "包", "盒", "瓶", "罐", "片", "條", "塊", "串", "根", "束", "份", "盤", "碗", "杯", "袋", "籃", "粒"]:
+                min_quantity = 1.0
+            else:
+                min_quantity = 0.0
+
         query = '''
-            INSERT INTO inventory (name, category, quantity, unit, purchase_date, expiry_date, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO inventory (name, category, quantity, unit, purchase_date, expiry_date, status, min_quantity)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         '''
-        params = (name, category, quantity, unit, purchase_date, expiry_date, status)
+        params = (name, category, quantity, unit, purchase_date, expiry_date, status, min_quantity)
         item_id = execute_query(query, params)
-        logger.info(f"✅ 食材入庫成功: {name} (ID: {item_id}), 數量: {quantity} {unit}")
+        logger.info(f"✅ 食材入庫成功: {name} (ID: {item_id}), 數量: {quantity} {unit}, 安全存量: {min_quantity} {unit}")
         
         # 紀錄歷史
-        self.log_action("ADD", name, quantity, unit, f"食材入庫，類別: {category}")
+        self.log_action("ADD", name, quantity, unit, f"食材入庫，類別: {category}，安全存量: {min_quantity}")
         return item_id
+
+    def update_min_quantity(self, item_id: int, min_quantity: float):
+        """
+        [Update] 更新食材安全臨界存量
+        """
+        item = self.get_ingredient(item_id)
+        if not item:
+            logger.error(f"❌ 找不到食材 (ID: {item_id})")
+            return
+
+        query = '''
+            UPDATE inventory 
+            SET min_quantity = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        '''
+        execute_query(query, (min_quantity, item_id))
+        logger.info(f"🔄 食材安全存量更新成功 (ID: {item_id}), 新安全存量: {min_quantity}")
+        
+        # 紀錄歷史
+        self.log_action("UPDATE_MIN_QTY", item['name'], min_quantity, item['unit'], f"更新安全存量臨界值（原安全存量: {item.get('min_quantity', 0.0)} -> 新安全存量: {min_quantity}）")
 
     def get_all_inventory(self) -> list:
         """
