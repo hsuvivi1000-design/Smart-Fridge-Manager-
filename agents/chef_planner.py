@@ -7,6 +7,41 @@ from google.genai import types
 # 載入環境變數 (例如 GEMINI_API_KEY)
 load_dotenv()
 
+def _extract_text_from_response(response) -> str:
+    """
+    從 Gemini API response 中穩健地提取文字內容。
+
+    gemini-2.5-flash 等 thinking model 的回應結構中：
+    - response.text 只會回傳非 thinking 的純文字 part。
+    - 若模型只輸出了 thinking part 而沒有純文字 part，response.text 會是 None。
+    - 透過手動遍歷 parts，可同時處理一般文字 part 與 thinking 後的文字 part。
+
+    Args:
+        response: Gemini API 的 GenerateContentResponse 物件。
+
+    Returns:
+        str: 從 response 中提取到的所有文字，以換行合併；若無則回傳空字串。
+    """
+    try:
+        # 優先嘗試 response.text（非 thinking model 時最快）
+        if response.text:
+            return response.text
+        # 若 response.text 為 None，手動遍歷 candidates[0].content.parts
+        if response.candidates and response.candidates[0].content:
+            parts = response.candidates[0].content.parts or []
+            text_parts = []
+            for part in parts:
+                # 跳過純思考 part（thought=True 的 part 不是最終回覆）
+                if getattr(part, "thought", False):
+                    continue
+                if hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
+            return "\n".join(text_parts)
+    except Exception:
+        pass
+    return ""
+
+
 class ChefAgent:
     """
     核心 Chef Agent (角色 C) 規劃類別。
@@ -83,15 +118,16 @@ class ChefAgent:
             "你的任務是根據冰箱現有食材，為使用者推薦今日可以烹飪的料理。\n"
             "請嚴格遵守以下決策流程，不可跳過任何步驟：\n\n"
             "【步驟一：取得庫存】\n"
-            "呼叫 `get_inventory` 取得所有食材的清單（含名稱、數量、到期日）。\n\n"
+            "呼叫 `get_inventory` 取得所有食材的清單（含名稱、數量、到期日）。\n"
+            "注意：系統已自動過濾掉所有過期食材，你收到的清單只包含可用食材，請放心使用。\n\n"
             "【步驟二：過濾過期食材】\n"
             "呼叫 `check_expiry` 判斷每項食材的保存狀態。\n"
-            "- 狀態為「已過期」的食材，絕對不可用於任何食譜推薦，請在心中記下它們的名稱，留待最後告知使用者。\n"
-            "- 僅使用狀態為「正常」、「即將到期」或「剩餘天數 ≤ 3 天」的食材來規劃菜色。\n\n"
+            "- 僅使用狀態為「正常」或「即將過期」的食材來規劃菜色。\n"
+            "- 優先使用即將過期的食材（days_left 最小者），避免浪費。\n\n"
             "【步驟三：推薦食譜（2–3 道）】\n"
             "呼叫 `search_recipes`，根據以下原則選出 2 到 3 道菜：\n"
             "- 優先選用即將到期（剩餘天數最少）的食材，避免浪費。\n"
-            "- 所有推薦食譜的主要食材必須是冰箱中「未過期」的庫存。\n"
+            "- 所有推薦食譜的主要食材必須是冰箱中可用的庫存。\n"
             "- 每道菜請說明：菜名、使用到哪些冰箱食材、簡短烹調方式（1–2 句）。\n\n"
             "【步驟四：採買清單（視需要）】\n"
             "僅在推薦食譜缺少部分食材時，才呼叫 `generate_shopping_list` 列出需採購的項目。\n"
@@ -100,15 +136,19 @@ class ChefAgent:
             "請以繁體中文，按照以下順序回覆使用者：\n"
             "1. 🍽️ 今日推薦菜色（2–3 道），說明每道菜使用的食材與作法。\n"
             "2. 🛒 採買清單（若有缺料才顯示）。\n"
-            "3. ⚠️ 已過期食材提醒：列出所有過期食材名稱，提醒使用者已無法使用。\n"
-            "   若無過期食材，此區塊可省略。\n"
+            "【重要】請勿在回覆中自行加入過期食材提醒區塊，系統會統一處理。\n"
         )
 
         # 設定 GenerateContentConfig
         # 將 tools_map 中註冊的 callable 函式傳入作為 available tools
+        # 停用 AFC（SDK 自動 Function Calling），改由我們的手動迴圈攔截工具呼叫，
+        # 才能記錄 logs 並在 get_inventory/check_expiry 回傳前過濾過期食材。
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=list(self.tools_map.values()),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
         )
 
         max_iterations = 10
@@ -133,7 +173,9 @@ class ChefAgent:
                 break
 
             # 提取 LLM 在這一輪的 Thought (思考)
-            thought = response.text or ""
+            # gemini-2.5 thinking model 的回應可能只含 thought part，
+            # response.text 只抓非 thought 的 text part，需手動遍歷所有 parts
+            thought = _extract_text_from_response(response)
 
             # 若此輪沒有產生 function_calls，代表決策樹結束
             if not response.function_calls:
@@ -233,7 +275,7 @@ class ChefAgent:
                     )
                 )
 
-        final_response = response.text if response.text else "決策流程執行完畢。"
+        final_response = _extract_text_from_response(response) or "決策流程執行完畢。"
         # 過期食材警告：統一放在回覆最末，且使用從兩個工具累積的去重名稱集合
         if expired_names_set:
             sorted_names = sorted(expired_names_set)  # 排序讓輸出穩定
