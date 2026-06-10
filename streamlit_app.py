@@ -243,7 +243,7 @@ def render_inventory(items: list[dict[str, Any]]) -> None:
     )
 
 
-def process_with_chef_agent(user_message: str) -> dict[str, Any]:
+def process_with_chef_agent(user_message: str, past_messages: list[dict[str, str]] | None = None) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         return {
             "response": "尚未設定 Gemini API Key。庫存與快速入庫可照常使用；AI 對話需要在 .env 設定 GEMINI_API_KEY。",
@@ -264,7 +264,7 @@ def process_with_chef_agent(user_message: str) -> dict[str, Any]:
             enhanced_message += f"\n使用者飲食偏好：{st.session_state.preferences}"
 
         agent = ChefAgent(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
-        return agent.run(enhanced_message)
+        return agent.run(enhanced_message, past_messages=past_messages)
     except Exception as exc:
         return {
             "response": f"處理時發生錯誤：{exc}",
@@ -408,7 +408,9 @@ def handle_pending_events() -> None:
         st.session_state.pending_input = None
         st.session_state.messages.append({"role": "user", "content": user_msg})
 
-        result = process_with_chef_agent(user_msg)
+        # 傳遞扣除目前剛加入的 user_msg 之前的歷史紀錄給 ChefAgent
+        past = st.session_state.messages[:-1]
+        result = process_with_chef_agent(user_msg, past_messages=past)
         st.session_state.messages.append({"role": "assistant", "content": result["response"]})
         st.session_state.execution_log = result.get("logs", [])
 
