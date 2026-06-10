@@ -7,6 +7,41 @@ from google.genai import types
 # 載入環境變數 (例如 GEMINI_API_KEY)
 load_dotenv()
 
+def _extract_text_from_response(response) -> str:
+    """
+    從 Gemini API response 中穩健地提取文字內容。
+
+    gemini-2.5-flash 等 thinking model 的回應結構中：
+    - response.text 只會回傳非 thinking 的純文字 part。
+    - 若模型只輸出了 thinking part 而沒有純文字 part，response.text 會是 None。
+    - 透過手動遍歷 parts，可同時處理一般文字 part 與 thinking 後的文字 part。
+
+    Args:
+        response: Gemini API 的 GenerateContentResponse 物件。
+
+    Returns:
+        str: 從 response 中提取到的所有文字，以換行合併；若無則回傳空字串。
+    """
+    try:
+        # 優先嘗試 response.text（非 thinking model 時最快）
+        if response.text:
+            return response.text
+        # 若 response.text 為 None，手動遍歷 candidates[0].content.parts
+        if response.candidates and response.candidates[0].content:
+            parts = response.candidates[0].content.parts or []
+            text_parts = []
+            for part in parts:
+                # 跳過純思考 part（thought=True 的 part 不是最終回覆）
+                if getattr(part, "thought", False):
+                    continue
+                if hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
+            return "\n".join(text_parts)
+    except Exception:
+        pass
+    return ""
+
+
 class ChefAgent:
     """
     核心 Chef Agent (角色 C) 規劃類別。
@@ -72,30 +107,43 @@ class ChefAgent:
             types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
         ]
         logs = []
+        expired_names_set: set = set()  # 跨工具累積過期食材名稱
 
         # 設計 System Prompt (專業大廚與冰箱管家角色，定義決策優先級)
+        from datetime import datetime
+        today_str = datetime.now().strftime("%Y-%m-%d")
         system_instruction = (
             "你是一位專業的大廚與冰箱大管家 (AI Kitchen Chef Agent)。\n"
-            "你的任務是精準管理冰箱庫存、追蹤食材效期，並推薦合適的食譜與產生採買清單。\n"
-            "請嚴格遵守以下三個互動階段與決策規範：\n"
+            f"今天的日期是：{today_str}。\n"
+            "你是一位專業的大廚與冰箱大管家 (AI Kitchen Chef Agent)。\n"
+            "你的任務是精準管理冰箱庫存、追蹤食材效期，並根據冰箱現有食材推薦合適的食譜與產生採買清單。\n"
+            "請嚴格遵守以下互動階段與決策規範，不可跳過任何必要步驟：\n\n"
             "【第一階段：食譜推薦】\n"
-            "1. 當使用者詢問要吃什麼時，優先呼叫 `get_inventory` 取得庫存，並可呼叫 `check_expiry` 檢查是否有即將過期的食材（不需要計算金額損失）。\n"
-            "2. 接著呼叫 `search_recipes` 來推薦合適的食譜選項。\n"
-            "3. ！！嚴格禁止！！在這個階段，你只能給出「食譜名稱」與「簡短介紹」，絕對不可以給出料理步驟，也不可以產生採買清單。\n"
+            "1. 當使用者詢問要吃什麼時，優先呼叫 `get_inventory` 取得庫存清單。\n"
+            "   (注意：系統已自動過濾掉過期食材，你收到的清單只包含可用食材。)\n"
+            "2. 接著呼叫 `check_expiry` 判斷食材狀態，優先挑選「即將過期」的食材來規劃菜色，避免浪費。\n"
+            "3. 呼叫 `search_recipes` 推薦 2 到 3 道合適的食譜選項。\n"
+            "4. ！！嚴格禁止！！在這個階段，你只能給出「食譜名稱」與「簡短介紹（包含使用到哪些冰箱食材）」，絕對不可以給出料理步驟，也不可以產生採買清單。\n\n"
             "【第二階段：確認料理】\n"
-            "4. 當使用者明確挑選了你要他煮的某個食譜後，你才可以給出詳細的「料理步驟」。\n"
-            "5. 同時，請檢查該食譜所需的食材。如果現有庫存不足或缺少食材，請主動呼叫 `generate_shopping_list` 工具來整理出缺少食材的採買清單。\n"
+            "5. 當使用者明確挑選了某個食譜後，你才可以給出詳細的「料理步驟」。\n"
+            "6. 同時，請檢查該食譜所需的食材。如果現有庫存不足或缺少食材，請主動呼叫 `generate_shopping_list` 工具來整理出缺少食材的採買清單。\n\n"
             "【第三階段：庫存扣除】\n"
-            "6. 當使用者「自行回報」他們已經煮完並且使用了哪些食材與數量時（例如：「我煮完了，用了半顆高麗菜跟200g雞胸肉」），你必須主動呼叫 `consume_ingredient` 工具，將對應的食材與數量從庫存中扣除。\n"
-            "【其他規範】\n"
-            "7. 你的回覆請保持友善、自然，並以繁體中文呈現。"
+            "7. 當使用者「自行回報」他們已經煮完並且使用了哪些食材與數量時（例如：「我煮完了，用了半顆高麗菜跟200g雞胸肉」），你必須主動呼叫 `consume_ingredient` 工具，將對應的食材與數量從庫存中扣除。\n\n"
+            "【最終回覆格式與注意事項】\n"
+            "- 請以繁體中文，保持友善、自然的方式呈現。\n"
+            "- 【重要】請勿在回覆中自行加入過期食材提醒區塊，系統會統一處理。"
         )
 
         # 設定 GenerateContentConfig
         # 將 tools_map 中註冊的 callable 函式傳入作為 available tools
+        # 停用 AFC（SDK 自動 Function Calling），改由我們的手動迴圈攔截工具呼叫，
+        # 才能記錄 logs 並在 get_inventory/check_expiry 回傳前過濾過期食材。
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=list(self.tools_map.values()),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
         )
 
         max_iterations = 10
@@ -120,7 +168,9 @@ class ChefAgent:
                 break
 
             # 提取 LLM 在這一輪的 Thought (思考)
-            thought = response.text or ""
+            # gemini-2.5 thinking model 的回應可能只含 thought part，
+            # response.text 只抓非 thought 的 text part，需手動遍歷所有 parts
+            thought = _extract_text_from_response(response)
 
             # 若此輪沒有產生 function_calls，代表決策樹結束
             if not response.function_calls:
@@ -160,6 +210,39 @@ class ChefAgent:
                             "error": f"Exception occurred in tool '{tool_name}'",
                             "detail": str(e)
                         }
+                    # ── 攔截工具回傳，確保 LLM 永遠看不到過期食材 ──
+                    if tool_name == "get_inventory" and isinstance(observation, list):
+                        from datetime import datetime
+                        today = datetime.now().date()
+                        fresh_items = []
+                        for item in observation:
+                            expiry_str = item.get("expiry_date", "")
+                            try:
+                                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                                days_left = (expiry_date - today).days
+                            except (ValueError, TypeError):
+                                days_left = None
+
+                            if days_left is not None and days_left < 0:
+                                # 已過期 → 記錄名稱，不傳給 LLM
+                                expired_names_set.add(item.get("name", "未知"))
+                            else:
+                                # 未過期 → 附上剩餘天數方便 LLM 排序緊迫程度
+                                item_copy = dict(item)
+                                if days_left is not None:
+                                    item_copy["days_left"] = days_left
+                                fresh_items.append(item_copy)
+
+                        # 覆寫 observation，LLM 只拿到未過期食材
+                        observation = fresh_items
+
+                    elif tool_name == "check_expiry" and isinstance(observation, list):
+                        # check_expiry 結果中「已過期」的名稱也累積到集合
+                        for item in observation:
+                            if item.get("status") == "已過期":
+                                expired_names_set.add(item.get("name", "未知"))
+                        # 過濾觀測結果，只保留非過期項目給 LLM
+                        observation = [item for item in observation if item.get("status") != "已過期"]
                 else:
                     observation = {
                         "error": f"Tool '{tool_name}' not registered in ChefAgent"
@@ -187,7 +270,17 @@ class ChefAgent:
                     )
                 )
 
-        final_response = response.text if response.text else "決策流程執行完畢。"
+        final_response = _extract_text_from_response(response) or "決策流程執行完畢。"
+        # 過期食材警告：統一放在回覆最末，且使用從兩個工具累積的去重名稱集合
+        if expired_names_set:
+            sorted_names = sorted(expired_names_set)  # 排序讓輸出穩定
+            expired_footer = (
+                "\n---\n"
+                "⚠️ **已過期食材提醒**\n"
+                f"以下食材已過期，**請勿食用且不能用於料理**：{', '.join(sorted_names)}。\n"
+                "建議儘速清理冰箱並補充新鮮食材。"
+            )
+            final_response = final_response + expired_footer
         return {
             "response": final_response,
             "logs": logs

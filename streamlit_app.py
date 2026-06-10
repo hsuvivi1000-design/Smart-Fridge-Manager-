@@ -59,9 +59,69 @@ def init_session_state() -> None:
         "preferences": "",
         "pending_input": None,
         "pending_image": None,
+        "budget_status": "正常",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+
+def render_shopping_list(items: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="section-title">採買清單 <span class="section-note">Shopping Agent</span></div>', unsafe_allow_html=True)
+    
+    # 預算狀態選擇
+    budget = st.selectbox(
+        "預算狀態",
+        options=["吃緊", "正常", "充裕"],
+        index=["吃緊", "正常", "充裕"].index(st.session_state.get("budget_status", "正常")),
+        key="budget_selectbox"
+    )
+    if budget != st.session_state.get("budget_status"):
+        st.session_state.budget_status = budget
+        st.rerun()
+
+    # 1. 偵測最近一次 AI generate_shopping_list 的結果
+    latest_shopping = None
+    for log in reversed(st.session_state.execution_log):
+        action = log.get("action", {})
+        if action.get("tool") == "generate_shopping_list" and log.get("observation"):
+            latest_shopping = log["observation"]
+            break
+
+    # 如果有 AI 產生的採買清單，我們直接顯示它
+    if latest_shopping and isinstance(latest_shopping, dict):
+        md_content = latest_shopping.get("shopping_list_md", "")
+        st.markdown(md_content)
+        st.text_area("複製採買清單 (Markdown)", value=md_content, height=150, key="copy_latest_shopping_list")
+    else:
+        # 沒有最近的 AI 食譜採買清單，我們動態基於低庫存生成
+        low_stock = []
+        for item in items:
+            mq = item.get("min_quantity", 0.0)
+            try:
+                mq_val = float(mq)
+            except (TypeError, ValueError):
+                mq_val = 0.0
+            q_val = float(item.get("quantity", 0.0))
+            if mq_val > 0.0 and q_val <= mq_val:
+                diff_qty = max(0.0, mq_val - q_val)
+                suggested_qty = diff_qty if diff_qty > 0 else mq_val
+                low_stock.append({
+                    "name": item["name"],
+                    "quantity": suggested_qty,
+                    "unit": item["unit"]
+                })
+
+        from tools.shopping_tools import generate_shopping_list
+        res = generate_shopping_list(
+            missing_ingredients=[],
+            low_stock_ingredients=low_stock,
+            budget_status=st.session_state.budget_status
+        )
+        md_content = res.get("shopping_list_md", "")
+        st.markdown(md_content)
+        if low_stock:
+            st.text_area("複製採買清單 (Markdown)", value=md_content, height=150, key="copy_realtime_shopping_list")
+
 
 
 def safe_text(value: Any) -> str:
@@ -405,12 +465,41 @@ st.markdown(
 )
 render_metrics(summary)
 
+def render_expiry_panel(items: list[dict[str, Any]]) -> None:
+    """Render a panel showing items sorted by urgency of expiry.
+    Uses check_expiry from tools.shopping_tools.
+    """
+    from tools.shopping_tools import check_expiry
+    st.markdown('<div class="section-title">效期檢查 <span class="section-note">Expiry Agent</span></div>', unsafe_allow_html=True)
+    # Run expiry check
+    expiry_results = check_expiry(items)
+    # Build markdown list
+    md_lines = []
+    for r in expiry_results:
+        name = r.get("name", "未知")
+        qty = r.get("quantity", 0)
+        unit = r.get("unit", "")
+        days = r.get("days_left")
+        status = r.get("status", "未知")
+        # Show days left if available
+        if days is None:
+            day_info = ""
+        elif days < 0:
+            day_info = f"（過期 {abs(days)} 天）"
+        else:
+            day_info = f"（剩 {days} 天）"
+        md_lines.append(f"- {name} {qty}{unit} {status}{day_info}")
+    if md_lines:
+        st.markdown("\n".join(md_lines))
+    else:
+        st.markdown("✅ 沒有食材需要注意效期。")
+
 left_col, center_col, right_col = st.columns([1.05, 2.15, 1.15], gap="large")
 
 with left_col:
     render_inventory(ingredients)
 
-    st.markdown("")
+
     with st.expander("快速入庫", expanded=not ingredients):
         with st.form("quick_add_form", clear_on_submit=True):
             name = st.text_input("食材名稱", placeholder="高麗菜")
@@ -422,6 +511,13 @@ with left_col:
             with c2:
                 unit = st.selectbox("單位", UNITS)
                 storage_method = st.selectbox("保存方式", STORAGE_METHODS)
+            
+            c3, c4 = st.columns([1, 1])
+            with c3:
+                use_custom_min = st.checkbox("自訂安全水位", value=False, help="未勾選時，將自動依據單位套用智慧安全存量（如：克為 100g，個為 1個）")
+            with c4:
+                min_quantity_val = st.number_input("安全存量臨界值", min_value=0.0, value=0.0, step=0.5)
+                
             submitted = st.form_submit_button("加入庫存", type="primary", use_container_width=True)
 
         if submitted:
@@ -438,6 +534,7 @@ with left_col:
                     purchase_date=today,
                     storage_method=storage_method,
                 )
+                min_qty = min_quantity_val if use_custom_min else None
                 inventory_agent.add_ingredient(
                     name=cleaned_name,
                     category=final_category,
@@ -445,6 +542,7 @@ with left_col:
                     unit=unit,
                     purchase_date=today,
                     expiry_date=expiry_date,
+                    min_quantity=min_qty
                 )
                 st.success(f"{cleaned_name} 已入庫，預估保存 {shelf_days} 天。")
                 st.session_state.execution_log = [
@@ -457,6 +555,7 @@ with left_col:
                                 "category": final_category,
                                 "sub_category": sub_category,
                                 "storage_method": storage_method,
+                                "min_quantity": min_qty,
                             },
                         },
                         "observation": {"expiry_date": expiry_date, "shelf_days": shelf_days},
@@ -466,21 +565,42 @@ with left_col:
 
     with st.expander("管理與編輯庫存"):
         if not ingredients:
-            st.info("目前無庫存。")
+            st.markdown('<div class="empty-state">目前冰箱無食材。</div>', unsafe_allow_html=True)
         else:
-            item_options = {item['id']: f"{item['name']} ({item['quantity']} {item['unit']})" for item in ingredients}
-            selected_item_id = st.selectbox("選擇要編輯的食材", options=list(item_options.keys()), format_func=lambda x: item_options[x])
+            item_options = {
+                item["id"]: f"{item['name']} (目前: {item['quantity']}{item['unit']}, 安全值: {item.get('min_quantity', 0.0)})"
+                for item in ingredients
+            }
+            selected_id = st.selectbox(
+                "選擇要編輯的食材",
+                options=list(item_options.keys()),
+                format_func=lambda x: item_options[x],
+                key="edit_select_box"
+            )
             
-            selected_item = next(item for item in ingredients if item['id'] == selected_item_id)
+            selected_item = next(item for item in ingredients if item["id"] == selected_id)
             
             with st.form("edit_inventory_form"):
                 c1, c2 = st.columns([1, 1])
                 with c1:
-                    edit_category = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(selected_item['category']) if selected_item['category'] in CATEGORIES else 0)
-                    edit_quantity = st.number_input("數量", min_value=0.0, value=float(selected_item['quantity']), step=0.5)
+                    edit_category = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(selected_item.get('category', '其他')) if selected_item.get('category', '其他') in CATEGORIES else 0)
+                    edit_qty = st.number_input(
+                        f"調整數量 ({selected_item['unit']})",
+                        min_value=0.0,
+                        value=float(selected_item["quantity"]),
+                        step=0.1 if selected_item['unit'] in ["克", "毫克", "毫升", "公斤", "公升"] else 1.0,
+                    )
                 with c2:
-                    current_expiry = datetime.strptime(selected_item['expiry_date'], "%Y-%m-%d").date() if selected_item.get('expiry_date') and selected_item['expiry_date'] != "未設定" else date.today()
+                    current_expiry_val = selected_item.get('expiry_date')
+                    current_expiry = datetime.strptime(current_expiry_val, "%Y-%m-%d").date() if current_expiry_val and current_expiry_val != "未設定" else date.today()
                     edit_expiry = st.date_input("過期時間", value=current_expiry)
+                    edit_min_qty = st.number_input(
+                        f"安全存量臨界 ({selected_item['unit']})",
+                        min_value=0.0,
+                        value=float(selected_item.get("min_quantity", 0.0)),
+                        step=1.0,
+                        help="設定為 0.0 可停用此食材的安全水位警示。"
+                    )
                 
                 col_save, col_delete = st.columns(2)
                 with col_save:
@@ -490,16 +610,17 @@ with left_col:
             
             if submitted_edit:
                 inventory_agent.update_ingredient(
-                    item_id=selected_item_id,
+                    item_id=selected_id,
                     category=edit_category,
-                    quantity=edit_quantity,
+                    quantity=edit_qty,
                     expiry_date=edit_expiry.strftime("%Y-%m-%d")
                 )
-                st.success(f"{selected_item['name']} 已更新。")
+                inventory_agent.update_min_quantity(selected_id, edit_min_qty)
+                st.success(f"已更新 {selected_item['name']} 設定！")
                 st.rerun()
             elif submitted_delete:
-                inventory_agent.delete_ingredient(item_id=selected_item_id)
-                st.success(f"{selected_item['name']} 已刪除。")
+                inventory_agent.delete_ingredient(selected_id)
+                st.success(f"已將 {selected_item['name']} 移出庫存！")
                 st.rerun()
 
     with st.expander("偏好設定"):
@@ -513,6 +634,8 @@ with left_col:
         if st.button(theme_label, use_container_width=True):
             st.session_state.dark_mode = not st.session_state.dark_mode
             st.rerun()
+
+
 
 with center_col:
     st.markdown(
