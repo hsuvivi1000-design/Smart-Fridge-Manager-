@@ -92,20 +92,29 @@ class ChefAgent:
         if tool_implementations:
             self.tools_map.update(tool_implementations)
 
-    def run(self, user_message: str) -> Dict[str, Any]:
+    def run(self, user_message: str, past_messages: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
         執行 Agent 決策流程，處理使用者訊息並觸發工具調用。
 
         Args:
             user_message (str): 使用者輸入的請求訊息。
+            past_messages: 過去的對話紀錄 (格式如 [{'role': 'user', 'content': '...'}, ...])
 
         Returns:
             Dict[str, Any]: 包含最終回覆 'response' 與決策歷程 'logs'。
         """
         # 初始化對話歷程
-        history = [
+        history = []
+        if past_messages:
+            for msg in past_messages:
+                # 忽略系統預設第一句話，或將 assistant 轉為 model
+                role = "model" if msg["role"] == "assistant" else "user"
+                history.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+        
+        # 加入當前使用者的輸入
+        history.append(
             types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
-        ]
+        )
         logs = []
         expired_names_set: set = set()  # 跨工具累積過期食材名稱
 
@@ -113,7 +122,6 @@ class ChefAgent:
         from datetime import datetime
         today_str = datetime.now().strftime("%Y-%m-%d")
         system_instruction = (
-            "你是一位專業的大廚與冰箱大管家 (AI Kitchen Chef Agent)。\n"
             f"今天的日期是：{today_str}。\n"
             "你的任務是根據冰箱現有食材，為使用者推薦今日可以烹飪的料理。\n"
             "請嚴格遵守以下決策流程，不可跳過任何步驟：\n\n"

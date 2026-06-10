@@ -243,7 +243,7 @@ def render_inventory(items: list[dict[str, Any]]) -> None:
     )
 
 
-def process_with_chef_agent(user_message: str) -> dict[str, Any]:
+def process_with_chef_agent(user_message: str, past_messages: list[dict[str, str]] | None = None) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         return {
             "response": "尚未設定 Gemini API Key。庫存與快速入庫可照常使用；AI 對話需要在 .env 設定 GEMINI_API_KEY。",
@@ -264,7 +264,7 @@ def process_with_chef_agent(user_message: str) -> dict[str, Any]:
             enhanced_message += f"\n使用者飲食偏好：{st.session_state.preferences}"
 
         agent = ChefAgent(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
-        return agent.run(enhanced_message)
+        return agent.run(enhanced_message, past_messages=past_messages)
     except Exception as exc:
         return {
             "response": f"處理時發生錯誤：{exc}",
@@ -408,7 +408,9 @@ def handle_pending_events() -> None:
         st.session_state.pending_input = None
         st.session_state.messages.append({"role": "user", "content": user_msg})
 
-        result = process_with_chef_agent(user_msg)
+        # 傳遞扣除目前剛加入的 user_msg 之前的歷史紀錄給 ChefAgent
+        past = st.session_state.messages[:-1]
+        result = process_with_chef_agent(user_msg, past_messages=past)
         st.session_state.messages.append({"role": "assistant", "content": result["response"]})
         st.session_state.execution_log = result.get("logs", [])
 
@@ -505,7 +507,8 @@ with left_col:
             name = st.text_input("食材名稱", placeholder="高麗菜")
             c1, c2 = st.columns([1, 1])
             with c1:
-                category = st.selectbox("分類", CATEGORIES)
+                cat_options = ["🤖 自動判斷"] + CATEGORIES
+                selected_category = st.selectbox("分類", cat_options)
                 quantity = st.number_input("數量", min_value=0.0, value=1.0, step=0.5)
             with c2:
                 unit = st.selectbox("單位", UNITS)
@@ -525,16 +528,18 @@ with left_col:
                 st.warning("請輸入食材名稱。")
             else:
                 today = date.today().strftime("%Y-%m-%d")
+                final_category = classify_ingredient(cleaned_name) if selected_category == "🤖 自動判斷" else selected_category
+                
                 expiry_date, sub_category, shelf_days = estimate_expiry_date(
                     name=cleaned_name,
-                    category=category,
+                    category=final_category,
                     purchase_date=today,
                     storage_method=storage_method,
                 )
                 min_qty = min_quantity_val if use_custom_min else None
                 inventory_agent.add_ingredient(
                     name=cleaned_name,
-                    category=category,
+                    category=final_category,
                     quantity=quantity,
                     unit=unit,
                     purchase_date=today,
@@ -549,7 +554,7 @@ with left_col:
                             "tool": "InventoryAgent.add_ingredient",
                             "args": {
                                 "name": cleaned_name,
-                                "category": category,
+                                "category": final_category,
                                 "sub_category": sub_category,
                                 "storage_method": storage_method,
                                 "min_quantity": min_qty,
@@ -560,7 +565,7 @@ with left_col:
                 ]
                 st.rerun()
 
-    with st.expander("庫存編輯"):
+    with st.expander("管理與編輯庫存"):
         if not ingredients:
             st.markdown('<div class="empty-state">目前冰箱無食材。</div>', unsafe_allow_html=True)
         else:
@@ -577,35 +582,48 @@ with left_col:
             
             selected_item = next(item for item in ingredients if item["id"] == selected_id)
             
-            edit_qty = st.number_input(
-                f"調整數量 ({selected_item['unit']})",
-                min_value=0.0,
-                value=float(selected_item["quantity"]),
-                step=0.1 if selected_item['unit'] in ["克", "毫克", "毫升", "公斤", "公升"] else 1.0,
-                key=f"qty_input_{selected_id}"
-            )
+            with st.form("edit_inventory_form"):
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    edit_category = st.selectbox("分類", CATEGORIES, index=CATEGORIES.index(selected_item.get('category', '其他')) if selected_item.get('category', '其他') in CATEGORIES else 0)
+                    edit_qty = st.number_input(
+                        f"調整數量 ({selected_item['unit']})",
+                        min_value=0.0,
+                        value=float(selected_item["quantity"]),
+                        step=0.1 if selected_item['unit'] in ["克", "毫克", "毫升", "公斤", "公升"] else 1.0,
+                    )
+                with c2:
+                    current_expiry_val = selected_item.get('expiry_date')
+                    current_expiry = datetime.strptime(current_expiry_val, "%Y-%m-%d").date() if current_expiry_val and current_expiry_val != "未設定" else date.today()
+                    edit_expiry = st.date_input("過期時間", value=current_expiry)
+                    edit_min_qty = st.number_input(
+                        f"安全存量臨界 ({selected_item['unit']})",
+                        min_value=0.0,
+                        value=float(selected_item.get("min_quantity", 0.0)),
+                        step=1.0,
+                        help="設定為 0.0 可停用此食材的安全水位警示。"
+                    )
+                
+                col_save, col_delete = st.columns(2)
+                with col_save:
+                    submitted_edit = st.form_submit_button("儲存修改", type="primary", use_container_width=True)
+                with col_delete:
+                    submitted_delete = st.form_submit_button("刪除此食材", use_container_width=True)
             
-            edit_min_qty = st.number_input(
-                f"安全存量臨界值 ({selected_item['unit']})",
-                min_value=0.0,
-                value=float(selected_item.get("min_quantity", 0.0)),
-                step=1.0,
-                key=f"min_input_{selected_id}",
-                help="設定為 0.0 可停用此食材的安全水位警示。"
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("更新設定", type="primary", use_container_width=True, key=f"btn_up_{selected_id}"):
-                    inventory_agent.update_quantity(selected_id, edit_qty)
-                    inventory_agent.update_min_quantity(selected_id, edit_min_qty)
-                    st.success(f"已更新 {selected_item['name']} 設定！")
-                    st.rerun()
-            with col2:
-                if st.button("刪除食材", type="secondary", use_container_width=True, key=f"btn_del_{selected_id}"):
-                    inventory_agent.delete_ingredient(selected_id)
-                    st.success(f"已將 {selected_item['name']} 移出庫存！")
-                    st.rerun()
+            if submitted_edit:
+                inventory_agent.update_ingredient(
+                    item_id=selected_id,
+                    category=edit_category,
+                    quantity=edit_qty,
+                    expiry_date=edit_expiry.strftime("%Y-%m-%d")
+                )
+                inventory_agent.update_min_quantity(selected_id, edit_min_qty)
+                st.success(f"已更新 {selected_item['name']} 設定！")
+                st.rerun()
+            elif submitted_delete:
+                inventory_agent.delete_ingredient(selected_id)
+                st.success(f"已將 {selected_item['name']} 移出庫存！")
+                st.rerun()
 
     with st.expander("偏好設定"):
         st.session_state.preferences = st.text_area(

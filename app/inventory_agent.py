@@ -113,6 +113,26 @@ class InventoryAgent:
         # 紀錄歷史
         self.log_action("UPDATE_QTY", item['name'], new_quantity, item['unit'], f"手動調整數量（原庫存: {old_quantity}）")
 
+    def update_ingredient(self, item_id: int, category: str, quantity: float, expiry_date: str):
+        """
+        [Update] 更新食材分類、數量與過期時間
+        """
+        item = self.get_ingredient(item_id)
+        if not item:
+            logger.error(f"❌ 找不到食材 (ID: {item_id})")
+            return
+
+        query = '''
+            UPDATE inventory 
+            SET category = ?, quantity = ?, expiry_date = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        '''
+        execute_query(query, (category, quantity, expiry_date, item_id))
+        logger.info(f"🔄 食材更新成功 (ID: {item_id})")
+        
+        # 紀錄歷史
+        self.log_action("UPDATE_QTY", item['name'], quantity, item['unit'], f"編輯食材（分類: {category}, 數量: {quantity}, 過期日: {expiry_date}）")
+
     def consume_ingredient(self, item_id: int, amount: float):
         """
         [Update] 消耗食材 (扣減數量)
