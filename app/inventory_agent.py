@@ -77,6 +77,27 @@ class InventoryAgent:
         # 紀錄歷史
         self.log_action("UPDATE_MIN_QTY", item['name'], min_quantity, item['unit'], f"更新安全存量臨界值（原安全存量: {item.get('min_quantity', 0.0)} -> 新安全存量: {min_quantity}）")
 
+    def update_expiry_date(self, item_id: int, new_expiry_date: str):
+        """
+        [Update] 更新食材有效期限
+        """
+        item = self.get_ingredient(item_id)
+        if not item:
+            logger.error(f"❌ 找不到食材 (ID: {item_id})")
+            return
+
+        old_expiry = item['expiry_date']
+        query = '''
+            UPDATE inventory 
+            SET expiry_date = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        '''
+        execute_query(query, (new_expiry_date, item_id))
+        logger.info(f"🔄 食材有效日期更新成功 (ID: {item_id}), 新有效日期: {new_expiry_date}")
+        
+        # 紀錄歷史
+        self.log_action("UPDATE_EXPIRY", item['name'], item['quantity'], item['unit'], f"手動調整有效日期（原期限: {old_expiry} -> 新期限: {new_expiry_date}）")
+
     def get_all_inventory(self) -> list:
         """
         [Read] 查詢所有庫存

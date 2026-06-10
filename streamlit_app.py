@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import io
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import streamlit as st
@@ -264,7 +264,8 @@ def process_with_chef_agent(user_message: str) -> dict[str, Any]:
             enhanced_message += f"\n使用者飲食偏好：{st.session_state.preferences}"
 
         agent = ChefAgent(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
-        return agent.run(enhanced_message)
+        chat_history = st.session_state.messages[:-1] if len(st.session_state.messages) > 0 else []
+        return agent.run(enhanced_message, chat_history=chat_history)
     except Exception as exc:
         return {
             "response": f"處理時發生錯誤：{exc}",
@@ -294,24 +295,54 @@ def process_image_with_gemini(image: Image.Image) -> dict[str, Any]:
         categories = "、".join(CATEGORIES)
         allowed_units = "、".join(UNITS)
         prompt = f"""
-你是 AI 冰箱管家。請辨識圖片中的食材，只回傳 JSON。
+你是 AI 冰箱管家。請辨識圖片中出現的食材或食品本身，並只回傳 JSON。
+【重要注意事項】：
+1. 僅辨識包裝或食品本身的「主要品名/食材名稱」（例如：鮮奶、牛肉、水餃、泡麵），**絕對禁止**去讀取或拆解外包裝背面或側邊的「成分表/配料表/營養標示細項」（例如：水、食鹽、棕櫚油、食品添加物、大豆沙拉油等）。
+2. 如果看到的是包裝好的食品，食材名稱應為該食品的名稱（如「水餃」），而非包裝上的成分原料。
+3. **有效期限提取**：請仔細尋找包裝上是否有印製「有效日期」、「到期日」、「有效期限」、「EXP」或「Use By」等日期。如果有，請將該日期提取並寫在 json 的 `expiry_date` 欄位（格式必須是 yyyy-mm-dd，如 2026-06-25）；如果在圖片中找不到任何有效期限，請將其設為 null，不要亂編。
+
 格式：
 {{
   "response": "用繁體中文簡短告知辨識結果",
-  "ingredients": [{{"name":"食材名稱","quantity":1,"unit":"個","category":"蔬菜"}}]
+  "ingredients": [{{"name":"食材名稱","quantity":1,"unit":"個","category":"蔬菜","expiry_date":"2026-06-25"}}]
 }}
 category 必須是以下之一：{categories}
 unit 必須是以下之一：{allowed_units}
 quantity 必須是數字。若圖片是水果盤或多種食材，請依食材種類拆成多筆；不確定單位時使用「個」。
 """
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[image, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0,
-            ),
-        )
+        fallback_models = [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-pro"
+        ]
+        models_to_try = [GEMINI_MODEL] + [m for m in fallback_models if m != GEMINI_MODEL]
+        
+        response = None
+        last_exception = None
+        
+        for try_model in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=try_model,
+                    contents=[image, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0,
+                    ),
+                )
+                break
+            except Exception as e:
+                last_exception = e
+                import sys
+                print(f"⚠️ 圖片辨識模型 {try_model} 呼叫失敗。錯誤訊息: {e}。嘗試下一個備援模型...", file=sys.stderr)
+        
+        if response is None:
+            raise last_exception
         result = json.loads(response.text)
         result.setdefault("response", "已辨識食材。")
         result.setdefault("ingredients", [])
@@ -350,12 +381,24 @@ def save_ingredients_to_db(items: list[dict[str, Any]]) -> dict[str, Any]:
         if category not in CATEGORIES:
             category = classify_ingredient(name)
 
-        expiry_date, _sub_category, _shelf_days = estimate_expiry_date(
-            name=name,
-            category=category,
-            purchase_date=today,
-            storage_method="冷藏",
-        )
+        # 如果 Vision 模型有成功識別出包裝上的有效日期，且格式正確，我們直接採用它
+        expiry_date = item.get("expiry_date")
+        is_valid_date = False
+        if expiry_date:
+            try:
+                # 驗證日期格式是否為 yyyy-mm-dd
+                datetime.strptime(expiry_date, "%Y-%m-%d")
+                is_valid_date = True
+            except (ValueError, TypeError):
+                is_valid_date = False
+
+        if not is_valid_date:
+            expiry_date, _sub_category, _shelf_days = estimate_expiry_date(
+                name=name,
+                category=category,
+                purchase_date=today,
+                storage_method="冷藏",
+            )
 
         try:
             inventory_agent.add_ingredient(
@@ -517,6 +560,22 @@ with left_col:
             with c4:
                 min_quantity_val = st.number_input("安全存量臨界值", min_value=0.0, value=0.0, step=0.5)
                 
+            c_date1, c_date2 = st.columns([1, 1])
+            with c_date1:
+                expiry_mode = st.radio(
+                    "效期設定方式",
+                    options=["AI 自動估算", "手動指定日期"],
+                    horizontal=True,
+                    help="AI 自動估算將依據食材名稱與保存方式自動估計保存期限；手動指定則可自訂到期日。"
+                )
+            with c_date2:
+                custom_expiry_date = st.date_input(
+                    "手動到期日",
+                    value=date.today() + timedelta(days=7),
+                    min_value=date.today(),
+                    help="僅在選擇「手動指定日期」時有效。"
+                )
+
             submitted = st.form_submit_button("加入庫存", type="primary", use_container_width=True)
 
         if submitted:
@@ -525,12 +584,17 @@ with left_col:
                 st.warning("請輸入食材名稱。")
             else:
                 today = date.today().strftime("%Y-%m-%d")
-                expiry_date, sub_category, shelf_days = estimate_expiry_date(
-                    name=cleaned_name,
-                    category=category,
-                    purchase_date=today,
-                    storage_method=storage_method,
-                )
+                if expiry_mode == "手動指定日期":
+                    expiry_date = custom_expiry_date.strftime("%Y-%m-%d")
+                    shelf_days = (custom_expiry_date - date.today()).days
+                    sub_category = "手動指定"
+                else:
+                    expiry_date, sub_category, shelf_days = estimate_expiry_date(
+                        name=cleaned_name,
+                        category=category,
+                        purchase_date=today,
+                        storage_method=storage_method,
+                    )
                 min_qty = min_quantity_val if use_custom_min else None
                 inventory_agent.add_ingredient(
                     name=cleaned_name,
@@ -593,12 +657,27 @@ with left_col:
                 key=f"min_input_{selected_id}",
                 help="設定為 0.0 可停用此食材的安全水位警示。"
             )
+
+            # 讀取當前有效日期作為預設值
+            curr_expiry_str = selected_item.get("expiry_date", "")
+            try:
+                curr_expiry_val = datetime.strptime(curr_expiry_str, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                curr_expiry_val = date.today()
+
+            edit_expiry = st.date_input(
+                "調整有效日期",
+                value=curr_expiry_val,
+                min_value=date.today() - timedelta(days=365),  # 允許輸入過期日期以編輯已過期食材
+                key=f"expiry_input_{selected_id}"
+            )
             
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("更新設定", type="primary", use_container_width=True, key=f"btn_up_{selected_id}"):
                     inventory_agent.update_quantity(selected_id, edit_qty)
                     inventory_agent.update_min_quantity(selected_id, edit_min_qty)
+                    inventory_agent.update_expiry_date(selected_id, edit_expiry.strftime("%Y-%m-%d"))
                     st.success(f"已更新 {selected_item['name']} 設定！")
                     st.rerun()
             with col2:

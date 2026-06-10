@@ -16,18 +16,30 @@ class RecipeMatcher:
         self.db_path = db_path
         self.client = chromadb.PersistentClient(path=self.db_path)
         
-        self.ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="paraphrase-multilingual-MiniLM-L12-v2"
-        )
-        
+        # 先檢查 collection 是否存在於資料庫中，避免尚未建置時下載並載入 470MB 模型的卡頓
+        collection_exists = False
         try:
-            self.collection = self.client.get_collection(
-                name=collection_name,
-                embedding_function=self.ef
-            )
-        except Exception as e:
+            collections = [c.name for c in self.client.list_collections()]
+            collection_exists = collection_name in collections
+        except Exception:
+            pass
+
+        if not collection_exists:
             print(f"無法載入資料庫，請確認 {self.db_path} 是否存在且已執行 build_db.py")
             self.collection = None
+            self.ef = None
+        else:
+            self.ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name="paraphrase-multilingual-MiniLM-L12-v2"
+            )
+            try:
+                self.collection = self.client.get_collection(
+                    name=collection_name,
+                    embedding_function=self.ef
+                )
+            except Exception as e:
+                print(f"載入 collection {collection_name} 失敗: {e}")
+                self.collection = None
 
     def _get_dietary_dislikes(self, habit: str) -> list:
         # 簡單的飲食習慣對應忌口清單
