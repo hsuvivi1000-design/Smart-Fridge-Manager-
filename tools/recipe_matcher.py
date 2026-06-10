@@ -2,6 +2,32 @@ import chromadb
 import json
 import os
 from chromadb.utils import embedding_functions
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class CustomGeminiEmbeddingFunction(EmbeddingFunction):
+    def __init__(self, api_key: str, model_name: str = "gemini-embedding-2"):
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = []
+        for text in input:
+            response = self.client.models.embed_content(
+                model=self.model_name,
+                contents=text
+            )
+            # Depending on SDK version, it might be response.embeddings[0].values or response.embeddings.values
+            try:
+                emb = response.embeddings[0].values
+            except (IndexError, TypeError, AttributeError):
+                emb = response.embeddings.values if hasattr(response.embeddings, 'values') else response.embeddings
+            embeddings.append(emb)
+        return embeddings
+
 
 # 計算當前檔案所在目錄的上一層，以便正確找到 knowledge_base
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -6,6 +6,5 @@ plotly>=5.18.0
 Pillow>=10.0.0
 pydantic
 chromadb
-sentence-transformers
 requests
 beautifulsoup4

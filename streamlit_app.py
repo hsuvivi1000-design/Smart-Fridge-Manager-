@@ -243,7 +243,7 @@ def render_inventory(items: list[dict[str, Any]]) -> None:
     )
 
 
-def process_with_chef_agent(user_message: str) -> dict[str, Any]:
+def process_with_chef_agent(user_message: str, past_messages: list[dict[str, str]] | None = None) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         return {
             "response": "尚未設定 Gemini API Key。庫存與快速入庫可照常使用；AI 對話需要在 .env 設定 GEMINI_API_KEY。",
@@ -451,7 +451,9 @@ def handle_pending_events() -> None:
         st.session_state.pending_input = None
         st.session_state.messages.append({"role": "user", "content": user_msg})
 
-        result = process_with_chef_agent(user_msg)
+        # 傳遞扣除目前剛加入的 user_msg 之前的歷史紀錄給 ChefAgent
+        past = st.session_state.messages[:-1]
+        result = process_with_chef_agent(user_msg, past_messages=past)
         st.session_state.messages.append({"role": "assistant", "content": result["response"]})
         st.session_state.execution_log = result.get("logs", [])
 
@@ -548,7 +550,8 @@ with left_col:
             name = st.text_input("食材名稱", placeholder="高麗菜")
             c1, c2 = st.columns([1, 1])
             with c1:
-                category = st.selectbox("分類", CATEGORIES)
+                cat_options = ["🤖 自動判斷"] + CATEGORIES
+                selected_category = st.selectbox("分類", cat_options)
                 quantity = st.number_input("數量", min_value=0.0, value=1.0, step=0.5)
             with c2:
                 unit = st.selectbox("單位", UNITS)
@@ -598,7 +601,7 @@ with left_col:
                 min_qty = min_quantity_val if use_custom_min else None
                 inventory_agent.add_ingredient(
                     name=cleaned_name,
-                    category=category,
+                    category=final_category,
                     quantity=quantity,
                     unit=unit,
                     purchase_date=today,
@@ -613,7 +616,7 @@ with left_col:
                             "tool": "InventoryAgent.add_ingredient",
                             "args": {
                                 "name": cleaned_name,
-                                "category": category,
+                                "category": final_category,
                                 "sub_category": sub_category,
                                 "storage_method": storage_method,
                                 "min_quantity": min_qty,
@@ -624,7 +627,7 @@ with left_col:
                 ]
                 st.rerun()
 
-    with st.expander("庫存編輯"):
+    with st.expander("管理與編輯庫存"):
         if not ingredients:
             st.markdown('<div class="empty-state">目前冰箱無食材。</div>', unsafe_allow_html=True)
         else:

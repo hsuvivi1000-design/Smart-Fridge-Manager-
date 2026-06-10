@@ -138,7 +138,6 @@ class ChefAgent:
         from datetime import datetime
         today_str = datetime.now().strftime("%Y-%m-%d")
         system_instruction = (
-            "你是一位專業的大廚與冰箱大管家 (AI Kitchen Chef Agent)。\n"
             f"今天的日期是：{today_str}。\n"
             "你的任務是根據冰箱現有食材，為使用者推薦今日可以烹飪的料理。\n"
             "請嚴格遵守以下決策流程，不可跳過任何步驟：\n\n"
