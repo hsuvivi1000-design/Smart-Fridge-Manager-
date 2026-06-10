@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 # 載入環境變數以支援 .env 檔案
 try:
     import dotenv
-    dotenv.load_dotenv()
+    dotenv.load_dotenv(override=True)
 except ImportError:
     pass
 

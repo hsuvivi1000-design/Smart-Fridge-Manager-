@@ -5,7 +5,7 @@ from google import genai
 from google.genai import types
 
 # 載入環境變數 (例如 GEMINI_API_KEY)
-load_dotenv()
+load_dotenv(override=True)
 
 def _extract_text_from_response(response) -> str:
     """
@@ -22,11 +22,8 @@ def _extract_text_from_response(response) -> str:
     Returns:
         str: 從 response 中提取到的所有文字，以換行合併；若無則回傳空字串。
     """
+    # 先試著從 candidates[0].content.parts 手動提取，避免 response.text 拋出例外而跳過整個邏輯
     try:
-        # 優先嘗試 response.text（非 thinking model 時最快）
-        if response.text:
-            return response.text
-        # 若 response.text 為 None，手動遍歷 candidates[0].content.parts
         if response.candidates and response.candidates[0].content:
             parts = response.candidates[0].content.parts or []
             text_parts = []
@@ -34,11 +31,25 @@ def _extract_text_from_response(response) -> str:
                 # 跳過純思考 part（thought=True 的 part 不是最終回覆）
                 if getattr(part, "thought", False):
                     continue
+                # 跳過 function_call 與 function_response
+                if getattr(part, "function_call", None) is not None:
+                    continue
+                if getattr(part, "function_response", None) is not None:
+                    continue
                 if hasattr(part, "text") and part.text:
                     text_parts.append(part.text)
-            return "\n".join(text_parts)
+            if text_parts:
+                return "\n".join(text_parts)
     except Exception:
         pass
+
+    try:
+        # 備用方案：如果上面沒抓到，嘗試直接拿 response.text
+        if response.text:
+            return response.text
+    except Exception:
+        pass
+        
     return ""
 
 
@@ -92,26 +103,31 @@ class ChefAgent:
         if tool_implementations:
             self.tools_map.update(tool_implementations)
 
-    def run(self, user_message: str, past_messages: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    def run(self, user_message: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
         執行 Agent 決策流程，處理使用者訊息並觸發工具調用。
 
         Args:
             user_message (str): 使用者輸入的請求訊息。
-            past_messages: 過去的對話紀錄 (格式如 [{'role': 'user', 'content': '...'}, ...])
+            chat_history (Optional[List[Dict[str, str]]]): 歷史對話訊息列表，如 [{"role": "user", "content": "..."}]。
 
         Returns:
             Dict[str, Any]: 包含最終回覆 'response' 與決策歷程 'logs'。
         """
         # 初始化對話歷程
         history = []
-        if past_messages:
-            for msg in past_messages:
-                # 忽略系統預設第一句話，或將 assistant 轉為 model
-                role = "model" if msg["role"] == "assistant" else "user"
-                history.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
-        
-        # 加入當前使用者的輸入
+        if chat_history:
+            # 只取最近 10 輪對話以避免 Context 過長且節省 API 額度
+            for msg in chat_history[-10:]:
+                role = "user" if msg.get("role") == "user" else "model"
+                history.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=msg.get("content", ""))]
+                    )
+                )
+
+        # 加入當前的使用者訊息
         history.append(
             types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
         )
@@ -127,7 +143,8 @@ class ChefAgent:
             "請嚴格遵守以下決策流程，不可跳過任何步驟：\n\n"
             "【步驟一：取得庫存】\n"
             "呼叫 `get_inventory` 取得所有食材的清單（含名稱、數量、到期日）。\n"
-            "注意：系統已自動過濾掉所有過期食材，你收到的清單只包含可用食材，請放心使用。\n\n"
+            "注意：系統已自動過濾掉所有過期食材，你收到的清單只包含可用食材，請放心使用。\n"
+            "【重要限制】若 `get_inventory` 回傳的可用食材清單為空，代表冰箱中沒有任何可用食材。在此情況下，你必須立刻終止後續所有步驟（包括步驟二、三、四），不要再呼叫其他任何工具，並直接親切地回覆使用者，說明目前冰箱中沒有任何可用食材，請他們先新增食材或使用拍照功能入庫，接著結束流程。\n\n"
             "【步驟二：過濾過期食材】\n"
             "呼叫 `check_expiry` 判斷每項食材的保存狀態。\n"
             "- 僅使用狀態為「正常」或「即將過期」的食材來規劃菜色。\n"
@@ -140,11 +157,17 @@ class ChefAgent:
             "【步驟四：採買清單（視需要）】\n"
             "僅在推薦食譜缺少部分食材時，才呼叫 `generate_shopping_list` 列出需採購的項目。\n"
             "若冰箱食材已足夠完成所有推薦菜色，則跳過此步驟，不需產生採買清單。\n\n"
-            "【步驟五：最終回覆格式】\n"
+            "【步驟五：最終回覆格式與推薦】\n"
             "請以繁體中文，按照以下順序回覆使用者：\n"
             "1. 🍽️ 今日推薦菜色（2–3 道），說明每道菜使用的食材與作法。\n"
             "2. 🛒 採買清單（若有缺料才顯示）。\n"
-            "【重要】請勿在回覆中自行加入過期食材提醒區塊，系統會統一處理。\n"
+            "【重要】請勿在回覆中自行加入過期食材提醒區塊，系統會統一處理。\n\n"
+            "【重要限制行為：處理煮完料理/消耗食材之指示】\n"
+            "若使用者在對話中提到「做完了某道菜」、「吃完了某道菜」、「我煮了某道菜」或明確提出要消耗/扣減食材，你必須：\n"
+            "1. 先呼叫 `get_inventory` 取得庫存，以確認冰箱中該食材的確切名稱與單位（如「克」、「顆」、「包」等）。\n"
+            "2. 針對該料理使用到的每項食材，呼叫 `consume_ingredient` 將數量扣除（必須傳入正確的 name、quantity 與 unit）。\n"
+            "3. 如果使用者沒有說具體消耗了多少，請根據該料理的常規食譜用量進行合理估算扣除（例如：肉類 150克、高麗菜 0.5顆等），並且不要扣到變成負數。\n"
+            "4. 扣除成功後，於對話中親切回覆，主動告訴使用者你已經幫忙把這些消耗的食材移出冰箱或減少數量，並列出消耗結果與祝他們用餐愉快！\n"
         )
 
         # 設定 GenerateContentConfig
@@ -165,12 +188,40 @@ class ChefAgent:
         while iteration < max_iterations:
             iteration += 1
             
-            # 呼叫 Gemini 模型
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=history,
-                config=config
-            )
+            # 呼叫 Gemini 模型 (具備 429/503 自動備援至其他可用模型之機制)
+            # 擴大備援模型清單以防單一模型限額/服務異常導致錯誤
+            fallback_models = [
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-3.5-flash",
+                "gemini-flash-latest",
+                "gemini-1.5-flash",
+                "gemini-2.0-flash",
+                "gemini-2.0-flash-lite",
+                "gemini-2.5-pro"
+            ]
+            models_to_try = [self.model] + [m for m in fallback_models if m != self.model]
+            
+            response = None
+            last_exception = None
+            
+            for try_model in models_to_try:
+                try:
+                    response = self.client.models.generate_content(
+                        model=try_model,
+                        contents=history,
+                        config=config
+                    )
+                    # 成功呼叫後，更新 self.model，後續對話即可直接使用此成功模型
+                    self.model = try_model
+                    break
+                except Exception as e:
+                    last_exception = e
+                    import sys
+                    print(f"⚠️ 呼叫模型 {try_model} 失敗 (可能為 429 額度超限或 503 高負載)。錯誤訊息: {e}。嘗試切換至下一個備援模型...", file=sys.stderr)
+            
+            if response is None:
+                raise last_exception
 
             # 將 LLM 生成內容存入對話歷史 (設定 role 為 model)
             if response.candidates and response.candidates[0].content:
