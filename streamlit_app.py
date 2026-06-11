@@ -60,9 +60,18 @@ def init_session_state() -> None:
         "pending_input": None,
         "pending_image": None,
         "budget_status": "正常",
+        "chat_input": "",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+
+def queue_chat_input() -> None:
+    message = st.session_state.get("chat_input", "").strip()
+    if not message:
+        return
+    st.session_state.pending_input = message
+    st.session_state.chat_input = ""
 
 
 def render_shopping_list(items: list[dict[str, Any]]) -> None:
@@ -182,12 +191,10 @@ def render_metrics(summary: dict[str, int]) -> None:
         ("狀態正常", summary["fresh"]),
     ]
     tiles = "".join(
-        f"""
-        <div class="metric-tile">
-            <div class="metric-label">{safe_text(label)}</div>
-            <div class="metric-value">{value}</div>
-        </div>
-        """
+        '<div class="metric-tile">'
+        f'<div class="metric-label">{safe_text(label)}</div>'
+        f'<div class="metric-value">{value}</div>'
+        "</div>"
         for label, value in metrics
     )
     st.markdown(f'<div class="metric-row">{tiles}</div>', unsafe_allow_html=True)
@@ -434,13 +441,11 @@ def render_chef_logs(logs: list[dict[str, Any]]) -> str:
             observation = observation[:240] + "..."
 
         steps.append(
-            f"""
-            <div class="log-step">
-                <div class="log-thought">thought · {thought or "無"}</div>
-                <div class="log-tool">tool · {tool_name or "none"}({args})</div>
-                <div class="log-observation">result · {observation or "無"}</div>
-            </div>
-            """
+            '<div class="log-step">'
+            f'<div class="log-thought">thought · {thought or "無"}</div>'
+            f'<div class="log-tool">tool · {tool_name or "none"}({args})</div>'
+            f'<div class="log-observation">result · {observation or "無"}</div>'
+            "</div>"
         )
     return f'<div class="log-panel">{"".join(steps)}</div>'
 
@@ -516,6 +521,37 @@ def render_expiry_panel(items: list[dict[str, Any]]) -> None:
     """
     from tools.shopping_tools import check_expiry
     st.markdown('<div class="section-title">效期檢查 <span class="section-note">Expiry Agent</span></div>', unsafe_allow_html=True)
+    expired_items = [
+        item
+        for item in items
+        if (parse_expiry(item.get("expiry_date")) is not None and parse_expiry(item.get("expiry_date")) < 0)
+    ]
+    if expired_items:
+        expired_names = "、".join(safe_text(item.get("name", "未命名")) for item in expired_items[:3])
+        more = f"等 {len(expired_items)} 項" if len(expired_items) > 3 else ""
+        st.warning(f"偵測到過期食材：{expired_names}{more}")
+        if st.button(
+            f"刪除 {len(expired_items)} 項過期食材",
+            use_container_width=True,
+            key="delete_expired_items",
+        ):
+            deleted_names = []
+            for item in expired_items:
+                inventory_agent.delete_ingredient(item["id"])
+                deleted_names.append(item.get("name", "未命名"))
+            st.session_state.execution_log = [
+                {
+                    "thought": "Remove expired ingredients from inventory.",
+                    "action": {
+                        "tool": "InventoryAgent.delete_ingredient",
+                        "args": {"expired_item_ids": [item["id"] for item in expired_items]},
+                    },
+                    "observation": {"deleted": deleted_names},
+                }
+            ]
+            st.success(f"已刪除 {len(deleted_names)} 項過期食材。")
+            st.rerun()
+
     # Run expiry check
     expiry_results = check_expiry(items)
     # Build markdown list
@@ -730,20 +766,22 @@ with center_col:
                 st.rerun()
 
     with input_col:
-        user_input = st.text_input(
+        st.text_input(
             "輸入訊息",
             placeholder="例如：我有雞胸肉和高麗菜，今晚煮什麼？",
             label_visibility="collapsed",
             key="chat_input",
+            on_change=queue_chat_input,
         )
 
     with send_col:
         if st.button("發送", type="primary", use_container_width=True):
-            if user_input.strip():
-                st.session_state.pending_input = user_input.strip()
-                st.rerun()
+            queue_chat_input()
+            st.rerun()
 
 with right_col:
+    render_expiry_panel(ingredients)
+    st.markdown("")
     st.markdown(
         '<div class="section-title">執行紀錄 <span class="section-note">Tool trace</span></div>',
         unsafe_allow_html=True,

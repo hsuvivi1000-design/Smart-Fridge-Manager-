@@ -53,6 +53,19 @@ def _extract_text_from_response(response) -> str:
     return ""
 
 
+def _is_empty_final_answer(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    empty_markers = {
+        "決策流程執行完畢。",
+        "決策流程執行完畢",
+        "流程執行完畢。",
+        "流程執行完畢",
+    }
+    return cleaned in empty_markers
+
+
 class ChefAgent:
     """
     核心 Chef Agent (角色 C) 規劃類別。
@@ -102,6 +115,104 @@ class ChefAgent:
         # 支援注入實作或 Mock 方法 (便於測試與後續串接)
         if tool_implementations:
             self.tools_map.update(tool_implementations)
+
+    def _synthesize_final_response(
+        self,
+        history: List[types.Content],
+        system_instruction: str,
+    ) -> str:
+        """Ask the model for the final user-facing answer after tool calls finish."""
+        try:
+            final_prompt = (
+                "請根據上方所有工具結果，直接輸出給使用者看的最終回答。"
+                "一定要推薦 2 到 3 道可做料理；若食材不足，也要說明目前食材可以簡單做什麼，"
+                "以及需要補買哪些材料。請使用繁體中文，不要只說流程已完成。"
+            )
+            final_response = self.client.models.generate_content(
+                model=self.model,
+                contents=[
+                    *history,
+                    types.Content(role="user", parts=[types.Part.from_text(text=final_prompt)]),
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.4,
+                ),
+            )
+            return _extract_text_from_response(final_response).strip()
+        except Exception:
+            return ""
+
+    def _fallback_final_response(self, logs: List[Dict[str, Any]]) -> str:
+        """Create a deterministic useful answer if the model returns no final text."""
+        inventory = []
+        expiry_results = []
+        for entry in logs:
+            tool_name = (entry.get("action") or {}).get("tool")
+            observation = entry.get("observation")
+            if tool_name == "get_inventory" and isinstance(observation, list):
+                inventory = observation
+            elif tool_name == "check_expiry" and isinstance(observation, list):
+                expiry_results = observation
+
+        usable_items = []
+        expiring_names = []
+        for item in inventory:
+            name = item.get("name")
+            if not name:
+                continue
+            usable_items.append(name)
+            days_left = item.get("days_left")
+            if isinstance(days_left, (int, float)) and days_left <= 2:
+                expiring_names.append(name)
+
+        if expiry_results:
+            for item in expiry_results:
+                name = item.get("name")
+                status = item.get("status", "")
+                if name and status in {"今天到期", "即將過期"} and name not in expiring_names:
+                    expiring_names.append(name)
+
+        if not usable_items:
+            return "目前沒有可用庫存可以規劃料理。建議先補充主食、蛋白質與蔬菜後再讓我幫你搭配菜色。"
+
+        try:
+            from tools.recipe_tools import search_recipes
+
+            recipes = search_recipes(
+                available_ingredients=usable_items,
+                preferences=[],
+                expiring_ingredients=expiring_names,
+            )
+        except Exception:
+            recipes = []
+
+        lines = [
+            "🍽️ 今日推薦菜色",
+            f"目前可用食材有：{', '.join(usable_items)}。",
+        ]
+        if expiring_names:
+            lines.append(f"建議優先使用：{', '.join(expiring_names)}。")
+
+        if recipes:
+            for recipe in recipes[:3]:
+                name = recipe.get("name") or "家常料理"
+                ingredients = recipe.get("ingredients") or usable_items
+                instructions = recipe.get("instructions") or ["將可用食材清洗切好後，以清炒、煎煮或涼拌方式調味。"]
+                if isinstance(instructions, list):
+                    method = " ".join(str(step) for step in instructions[:2])
+                else:
+                    method = str(instructions)
+                lines.append(f"- {name}：可使用 {', '.join(map(str, ingredients[:6]))}。{method}")
+        else:
+            lines.extend(
+                [
+                    f"- 清爽拼盤：可使用 {', '.join(usable_items[:4])}，清洗切塊後直接食用或搭配優格。",
+                    f"- 簡易沙拉：可使用 {', '.join(usable_items[:4])}，加入少量鹽、橄欖油或蜂蜜調味。",
+                ]
+            )
+
+        return "\n".join(lines)
 
     def run(self, user_message: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
@@ -334,7 +445,11 @@ class ChefAgent:
                     )
                 )
 
-        final_response = _extract_text_from_response(response) or "決策流程執行完畢。"
+        final_response = _extract_text_from_response(response).strip()
+        if _is_empty_final_answer(final_response):
+            final_response = self._synthesize_final_response(history, system_instruction)
+        if _is_empty_final_answer(final_response):
+            final_response = self._fallback_final_response(logs)
         # 過期食材警告：統一放在回覆最末，且使用從兩個工具累積的去重名稱集合
         if expired_names_set:
             sorted_names = sorted(expired_names_set)  # 排序讓輸出穩定
